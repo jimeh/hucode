@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { EventEmitter } from 'events';
-import { mkdirSync, realpathSync, rmSync, Stats, statSync } from 'fs';
+import { mkdirSync, realpathSync, rmSync, Stats, statSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { DeferredPromise, timeout } from '../../../base/common/async.js';
 import { basename, join } from '../../../base/common/path.js';
@@ -49,6 +49,7 @@ import {
 } from '../../electron-main/hostedWorkspacesController.js';
 import {
 	createHucodeDesktopRestoreCandidates,
+	getHucodeLegacyRetainedRestoreCandidateId,
 	type HucodeCanonicalWorkbenchPath,
 	HucodeDesktopWorkbenchOwnershipCoordinator,
 	type IHucodeDesktopWorkbenchPath,
@@ -60,7 +61,9 @@ import {
 function resolvedPath(path: string): IHucodeDesktopWorkbenchPath {
 	let canonicalPath: string;
 	try {
-		canonicalPath = realpathSync.native(path);
+		// `realpathSync.native` is not usable in the Electron test renderer and
+		// would silently fall back to the unresolved path.
+		canonicalPath = realpathSync(path);
 	} catch {
 		canonicalPath = path;
 	}
@@ -2015,7 +2018,9 @@ suite('ResidentHostedWorkspacesController', () => {
 				activeWorktreePath: scratch,
 				shouldRestoreCandidate: candidate =>
 					candidate.stableInstanceId ===
-					`legacy-retained:${scratch}`,
+					getHucodeLegacyRetainedRestoreCandidateId(
+						resolvedPath(scratch)
+					),
 			});
 
 			await controller.ensureRestored();
@@ -7451,6 +7456,69 @@ suite('ResidentHostedWorkspacesController', () => {
 					phase: ownershipOf(ownershipCoordinator, target)?.phase,
 				}, { state: 'crashed', phase: 'recovering' });
 			});
+
+		for (const order of ['target first', 'alias first'] as const) {
+			test(`overlapping opens through symlink aliases join one active view (${order})`,
+				async () => {
+					const real = createWorktree(`overlap-alias-real-${order}`);
+					const alias = join(tempRoot, `overlap-alias-link-${order}`);
+					symlinkSync(real, alias, 'dir');
+					const heldStat = new HeldStat();
+					heldStat.hold(real);
+					heldStat.hold(alias);
+					const ownershipCoordinator =
+						new HucodeDesktopWorkbenchOwnershipCoordinator();
+					const { controller, viewFactory } = createController({
+						ownershipCoordinator,
+						stat: heldStat.stat,
+					});
+
+					const first = controller.openAdmittedWorkspace(real);
+					const realStat = await heldStat.next(real);
+					const second = controller.openAdmittedWorkspace(alias);
+					const aliasStat = await heldStat.next(alias);
+					// Separate macrotasks model separate stat callbacks.
+					const [early, late, openedPath] = order === 'target first'
+						? [realStat, aliasStat, real]
+						: [aliasStat, realStat, alias];
+					early.release();
+					await timeout(0);
+					late.release();
+					await Promise.all([first, second]);
+
+					const state = controller.getState();
+					const owners = ownershipCoordinator.snapshot();
+					assert.deepStrictEqual({
+						views: viewFactory.views.length,
+						instancePaths: state.instances.map(
+							instance => instance.worktreePath
+						),
+						activeIsTheInstance: state.activeInstanceId ===
+							state.instances[0]?.instanceId,
+						owners: owners.map(ownership =>
+							ownership.owner.kind === 'hosted' &&
+							ownership.owner.instanceId === state.instances[0]?.instanceId
+						),
+						retainedPaths: state.retainedWorkbenches?.map(record =>
+							URI.revive(record.folderUri).fsPath
+						),
+						retainedStates: retainedStatus(controller),
+						viewShown: viewFactory.views.map(view =>
+							view.visibleCalls.at(-1)
+						),
+					}, {
+						views: 1,
+						instancePaths: [openedPath],
+						activeIsTheInstance: true,
+						owners: [true],
+						retainedPaths: [openedPath],
+						retainedStates: [
+							{ desiredState: 'loaded', folderStatus: undefined },
+						],
+						viewShown: [true],
+					});
+				});
+		}
 
 		test('simultaneous opens of a retained workbench keep it loaded and active',
 			async () => {

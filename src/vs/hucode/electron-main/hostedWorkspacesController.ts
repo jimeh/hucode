@@ -1531,6 +1531,20 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			(this.shuttingDown || !canApply() || this._store.isDisposed)) {
 			return;
 		}
+		// An open through a symlink alias of a folder that a live instance in
+		// this window already serves continues under that instance's own path,
+		// as routeWorkspaceOpen does once the owner is visible. The base
+		// existing-live branch below then activates it in request order. The
+		// owner is always registered by now: an admission's chain from its
+		// prepared stat to registration is microtask-only unless an onboarding
+		// beforeCreate runs, and that window exists for same-path opens too.
+		const aliasedInstance = folder &&
+			!this.hostedWorkspaces.getInstanceByPath(worktreePath)
+			? this.getOpenableLiveOwnerInstance(folder.ownershipPath)
+			: undefined;
+		if (aliasedInstance) {
+			worktreePath = aliasedInstance.worktreePath;
+		}
 
 		const retainedBeforeOpen = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
@@ -2589,6 +2603,23 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			});
 			throw error;
 		}
+	}
+
+	/** Returns this window's live hosted instance owning a resolved path. */
+	private getOpenableLiveOwnerInstance(
+		ownershipPath: IHucodeDesktopWorkbenchPath
+	): IHostedWorkbenchInstance | undefined {
+		const current = this.ownershipCoordinator.lookup(ownershipPath);
+		const owner = current.kind === 'current-owner'
+			? current.ownership.owner
+			: undefined;
+		const instance = owner?.kind === 'hosted' &&
+			owner.windowId === this.window.id
+			? this.instancesById.get(owner.instanceId)
+			: undefined;
+		return instance && this.isOpenableLiveInstance(instance)
+			? instance
+			: undefined;
 	}
 
 	/** Stats a folder and resolves its ownership key concurrently. */
