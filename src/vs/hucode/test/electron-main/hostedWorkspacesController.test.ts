@@ -7167,6 +7167,164 @@ suite('ResidentHostedWorkspacesController', () => {
 				});
 			});
 
+		/**
+		 * Starts a navigation from the active alpha workbench to `target` and
+		 * waits until its attach has created the target's view.
+		 */
+		async function startNavigationAttach(
+			controller: ResidentHostedWorkspacesController,
+			viewFactory: TestHostedWorkbenchViewFactory,
+			heldStat: HeldStat,
+			target: string
+		) {
+			const binding = controller.acquireHostedShellBinding(1)!;
+			const navigation = controller.navigateHostedShellToFolder(
+				binding,
+				{ folderUri: URI.file(target).toJSON() },
+				{
+					isCurrentAndActiveVisible: async () =>
+						controller.getState().activeInstanceId ===
+						binding.instanceId,
+				}
+			);
+			const navigationStat = await heldStat.next(target);
+			return { navigation, navigationStat };
+		}
+
+		async function waitForViews(
+			viewFactory: TestHostedWorkbenchViewFactory,
+			count: number
+		): Promise<void> {
+			for (let attempt = 0; attempt < 100 &&
+				viewFactory.views.length < count; attempt++) {
+				await timeout(0);
+			}
+			assert.strictEqual(viewFactory.views.length, count);
+		}
+
+		function ownershipOf(
+			coordinator: HucodeDesktopWorkbenchOwnershipCoordinator,
+			path: string
+		) {
+			const lookup = coordinator.lookup(path);
+			return lookup.kind === 'current-owner'
+				? {
+					phase: lookup.ownership.phase,
+					owner: lookup.ownership.owner,
+				}
+				: undefined;
+		}
+
+		for (const join of ['stat join', 'existing-live open'] as const) {
+			test(`an open joining a navigation's attach (${join}) publishes ownership`,
+				async () => {
+					const alpha = createWorktree(`nav-join-alpha-${join}`);
+					const target = createWorktree(`nav-join-target-${join}`);
+					const heldLoad = new DeferredPromise<void>();
+					const heldStat = new HeldStat();
+					const ownershipCoordinator =
+						new HucodeDesktopWorkbenchOwnershipCoordinator();
+					const { controller, viewFactory } = createController({
+						ownershipCoordinator,
+						stat: heldStat.stat,
+						loadUrlPromises: [Promise.resolve(), heldLoad.p],
+					});
+					await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+					controller.notifyHostedWorkspaceReady('instance-1');
+					heldStat.hold(target, join === 'stat join' ? 2 : 1);
+
+					const { navigation, navigationStat } =
+						await startNavigationAttach(
+							controller,
+							viewFactory,
+							heldStat,
+							target
+						);
+					let sidebarOpen: Promise<void>;
+					if (join === 'stat join') {
+						sidebarOpen = controller.openAdmittedWorkspace(target);
+						const sidebarStat = await heldStat.next(target);
+						navigationStat.release();
+						await waitForViews(viewFactory, 2);
+						sidebarStat.release();
+					} else {
+						navigationStat.release();
+						await waitForViews(viewFactory, 2);
+						sidebarOpen = controller.openAdmittedWorkspace(target);
+					}
+					await sidebarOpen;
+					const targetInstanceId = controller.getState().instances.find(
+						instance => instance.worktreePath === target
+					)?.instanceId;
+					assert.ok(targetInstanceId);
+					assert.strictEqual(
+						controller.getState().activeInstanceId,
+						targetInstanceId
+					);
+					heldLoad.complete();
+					await navigation;
+
+					assert.deepStrictEqual({
+						activeInstanceId: controller.getState().activeInstanceId,
+						ownership: ownershipOf(ownershipCoordinator, target),
+						// Another window's admission must be routed to the live
+						// owner instead of waiting on an unresolved reservation.
+						laterAdmission: ownershipCoordinator.reserve(
+							target,
+							{ kind: 'regular', windowId: 42 }
+						).kind,
+					}, {
+						activeInstanceId: targetInstanceId,
+						ownership: {
+							phase: 'live',
+							owner: {
+								kind: 'hosted',
+								windowId: 1,
+								instanceId: targetInstanceId,
+							},
+						},
+						laterAdmission: 'current-owner',
+					});
+				});
+		}
+
+		test('an adopted navigation attach that crashed is not published live',
+			async () => {
+				const alpha = createWorktree('nav-join-crash-alpha');
+				const target = createWorktree('nav-join-crash-target');
+				const heldLoad = new DeferredPromise<void>();
+				const heldStat = new HeldStat();
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					ownershipCoordinator,
+					stat: heldStat.stat,
+					loadUrlPromises: [Promise.resolve(), heldLoad.p],
+				});
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(target);
+
+				const { navigation, navigationStat } = await startNavigationAttach(
+					controller,
+					viewFactory,
+					heldStat,
+					target
+				);
+				navigationStat.release();
+				await waitForViews(viewFactory, 2);
+				await controller.openAdmittedWorkspace(target);
+				viewFactory.views[1].rawWebContents.emit('render-process-gone');
+				heldLoad.complete();
+				await navigation;
+
+				assert.deepStrictEqual({
+					state: controller.getState().instances.find(instance =>
+						instance.worktreePath === target)?.state,
+					phase: ownershipOf(ownershipCoordinator, target)?.phase,
+				}, { state: 'crashed', phase: 'recovering' });
+			});
+
 		test('simultaneous opens of a retained workbench keep it loaded and active',
 			async () => {
 				const scratch = createWorktree('overlap-retained');

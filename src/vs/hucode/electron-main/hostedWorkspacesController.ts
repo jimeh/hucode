@@ -2443,6 +2443,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 						}
 					}
 					onSupersededRollback();
+				} else if (this.isLiveInstance(instance)) {
+					// Another open adopted and activated this instance while it
+					// attached. This attach still holds the only reservation, so
+					// publish it; otherwise the live workbench keeps a reservation
+					// whose waiters never settle.
+					this.publishInstanceOwnership(instance);
 				}
 				return undefined;
 			}
