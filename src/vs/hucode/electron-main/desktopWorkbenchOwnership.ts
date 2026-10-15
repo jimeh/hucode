@@ -1359,6 +1359,142 @@ export async function transferHucodeDesktopWorkbenchToRegularWindow(
 	}
 }
 
+/** Shell effects used by {@link routeHucodeDesktopWorkspaceOpen}. */
+export interface IHucodeDesktopWorkspaceRouteDelegate {
+	readonly coordinator: HucodeDesktopWorkbenchOwnershipCoordinator;
+	/** The Omni window the open was requested in. */
+	readonly windowId: number;
+	readonly worktreePath: string;
+	readonly projectId?: string;
+	/** Whether the request still applies; checked before every effect. */
+	canApply(): boolean;
+	resolvePath?(path: string): Promise<IHucodeDesktopWorkbenchPath>;
+	/**
+	 * Records a project-less folder in the catalog. The result's `apply`
+	 * publishes the updated catalog once the route still applies.
+	 */
+	addFolderToCatalog(worktreePath: string): Promise<{
+		readonly worktreePath: string;
+		readonly projectId?: string;
+		apply(): void;
+	}>;
+	/** Opens the folder as a hosted workbench in the requesting window. */
+	openInRequestingWindow(
+		worktreePath: string,
+		projectId: string | undefined
+	): Promise<void>;
+	/** Focuses a regular owner; returns false when its window is gone. */
+	focusRegularOwner(windowId: number): boolean;
+	/** Reopens a hosted owner in its window; returns false when it is stale. */
+	openHostedOwner(
+		ownership: IHucodeDesktopWorkbenchOwnership,
+		projectId: string | undefined
+	): Promise<boolean>;
+	focusHostedOwner(ownership: IHucodeDesktopWorkbenchOwnership): void;
+}
+
+/**
+ * Focuses the current owner of a desktop workbench path, or opens it as a
+ * hosted workbench in the requesting window when nobody owns it.
+ */
+export async function routeHucodeDesktopWorkspaceOpen(
+	delegate: IHucodeDesktopWorkspaceRouteDelegate
+): Promise<HucodeDesktopWorkbenchRouteOutcome> {
+	const { coordinator, windowId } = delegate;
+	let { worktreePath, projectId } = delegate;
+	const resolvePath = delegate.resolvePath ?? resolveHucodeDesktopWorkbenchPath;
+	// Every coordinator call below resolves the path after the last await
+	// before it, as the synchronous canonicalization did. The request can
+	// stop applying while a resolution is pending, so each one re-checks
+	// before its result is used; `undefined` means the route is superseded.
+	const resolveCurrent = async () => {
+		const path = await resolvePath(worktreePath);
+		return delegate.canApply() ? path : undefined;
+	};
+	for (let attempt = 0; attempt < 4; attempt++) {
+		const path = await resolveCurrent();
+		if (!path) {
+			return { kind: 'superseded' };
+		}
+		const lookup = coordinator.lookup(path);
+		if (lookup.kind === 'absent') {
+			if (!projectId) {
+				const target = await delegate.addFolderToCatalog(worktreePath);
+				if (!delegate.canApply()) {
+					return { kind: 'superseded' };
+				}
+				projectId = target.projectId;
+				// The catalog can canonicalize the folder; key ownership by
+				// the path that is actually opened.
+				worktreePath = target.worktreePath;
+				target.apply();
+			}
+			await delegate.openInRequestingWindow(worktreePath, projectId);
+			if (!delegate.canApply()) {
+				return { kind: 'superseded' };
+			}
+			const openedPath = await resolveCurrent();
+			if (!openedPath) {
+				return { kind: 'superseded' };
+			}
+			const opened = coordinator.lookup(openedPath);
+			if (opened.kind === 'absent') {
+				return { kind: 'failed' };
+			}
+			if (opened.ownership.owner.kind === 'hosted' &&
+				opened.ownership.owner.windowId === windowId) {
+				delegate.focusHostedOwner(opened.ownership);
+				return { kind: 'opened-hosted', ownership: opened.ownership };
+			}
+			continue;
+		}
+		if (lookup.ownership.phase === 'reserved' ||
+			lookup.ownership.phase === 'transferring') {
+			const pending = coordinator.reserve(path, {
+				kind: 'hosted',
+				windowId,
+				instanceId: `route:${windowId}`,
+			});
+			if (pending.kind === 'reserved-conflict') {
+				await pending.settled;
+				continue;
+			}
+			if (pending.kind === 'reserved') {
+				coordinator.release(pending.reservation);
+				continue;
+			}
+		}
+
+		const owner = lookup.ownership.owner;
+		if (owner.kind === 'regular') {
+			if (!delegate.focusRegularOwner(owner.windowId)) {
+				coordinator.release(toToken(lookup.ownership));
+				continue;
+			}
+			return { kind: 'focused-regular', ownership: lookup.ownership };
+		}
+
+		if (!await delegate.openHostedOwner(lookup.ownership, projectId)) {
+			continue;
+		}
+		if (!delegate.canApply()) {
+			return { kind: 'superseded' };
+		}
+		const currentPath = await resolveCurrent();
+		if (!currentPath) {
+			return { kind: 'superseded' };
+		}
+		const current = coordinator.lookup(currentPath);
+		if (current.kind === 'current-owner' &&
+			current.ownership.owner.kind === 'hosted' &&
+			current.ownership.owner.windowId === owner.windowId) {
+			delegate.focusHostedOwner(current.ownership);
+			return { kind: 'focused-hosted', ownership: current.ownership };
+		}
+	}
+	return { kind: 'superseded' };
+}
+
 function restoreHucodeTransferringOwner(
 	coordinator: HucodeDesktopWorkbenchOwnershipCoordinator,
 	token: IHucodeDesktopWorkbenchOwnershipToken

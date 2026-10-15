@@ -34,6 +34,7 @@ import {
 	projectHucodeDesktopRetainedRestoreWorkbenches,
 	resolveHucodeDesktopWorkbenchPath,
 	selectHucodeDesktopRestoreCandidates,
+	routeHucodeDesktopWorkspaceOpen,
 	transferHucodeDesktopWorkbenchToRegularWindow,
 	validateHucodeDesktopHostedOwnership,
 	waitForHucodeRegularWindowLoadCommit,
@@ -1919,6 +1920,16 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 					pending.push({ path, result });
 					return result.p;
 				},
+				/** Waits, with a bound, for the next resolution request. */
+				async next(): Promise<{
+					readonly path: string;
+					settle(canonical: string): void;
+				}> {
+					for (let attempt = 0; attempt < 100 && !pending.length; attempt++) {
+						await timeout(0);
+					}
+					return this.take();
+				},
 				take(): { readonly path: string; settle(canonical: string): void } {
 					const next = pending.shift();
 					assert.ok(next, 'expected a pending resolution');
@@ -2104,6 +2115,104 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 					[{ canonicalPath: '/real/new', owner: regular(7) }]
 				);
 			});
+
+		/** A route delegate that records effects and holds every resolution. */
+		function createRoute(coordinator: HucodeDesktopWorkbenchOwnershipCoordinator) {
+			const resolver = createHeldResolver();
+			const effects: string[] = [];
+			const state = { applicable: true };
+			const route = routeHucodeDesktopWorkspaceOpen({
+				coordinator,
+				windowId: 1,
+				worktreePath: '/repo',
+				projectId: 'project',
+				canApply: () => state.applicable,
+				resolvePath: resolver.resolve,
+				addFolderToCatalog: async () => assert.fail('already cataloged'),
+				openInRequestingWindow: async path => {
+					effects.push(`open:${path}`);
+					coordinator.seed({
+						path: target(path),
+						owner: hosted(1, 'opened'),
+					});
+				},
+				focusRegularOwner: windowId => {
+					effects.push(`focus-regular:${windowId}`);
+					return true;
+				},
+				openHostedOwner: async ownership => {
+					effects.push(`open-owner:${ownership.owner.windowId}`);
+					return true;
+				},
+				focusHostedOwner: ownership => {
+					effects.push(`focus-hosted:${ownership.owner.windowId}`);
+				},
+			});
+			return { resolver, effects, state, route };
+		}
+
+		test('a route invalidated during its initial resolution focuses nothing',
+			async () => {
+				const coordinator = createCoordinator();
+				coordinator.seed({ path: target('/repo'), owner: regular(5) });
+				const { resolver, effects, state, route } = createRoute(coordinator);
+
+				const resolution = await resolver.next();
+				state.applicable = false;
+				resolution.settle('/repo');
+
+				assert.deepStrictEqual(
+					{ outcome: (await route).kind, effects },
+					{ outcome: 'superseded', effects: [] }
+				);
+			});
+
+		test('a route invalidated while resolving after its own open focuses nothing',
+			async () => {
+				const coordinator = createCoordinator();
+				const { resolver, effects, state, route } = createRoute(coordinator);
+
+				(await resolver.next()).settle('/repo');
+				const afterOpen = await resolver.next();
+				state.applicable = false;
+				afterOpen.settle('/repo');
+
+				assert.deepStrictEqual(
+					{ outcome: (await route).kind, effects },
+					{ outcome: 'superseded', effects: ['open:/repo'] }
+				);
+			});
+
+		test('a route invalidated while resolving after reopening a hosted owner focuses nothing',
+			async () => {
+				const coordinator = createCoordinator();
+				coordinator.seed({ path: target('/repo'), owner: hosted(2, 'alpha') });
+				const { resolver, effects, state, route } = createRoute(coordinator);
+
+				(await resolver.next()).settle('/repo');
+				const afterOpen = await resolver.next();
+				state.applicable = false;
+				afterOpen.settle('/repo');
+
+				assert.deepStrictEqual(
+					{ outcome: (await route).kind, effects },
+					{ outcome: 'superseded', effects: ['open-owner:2'] }
+				);
+			});
+
+		test('an applicable route focuses its hosted owner', async () => {
+			const coordinator = createCoordinator();
+			coordinator.seed({ path: target('/repo'), owner: hosted(2, 'alpha') });
+			const { resolver, effects, route } = createRoute(coordinator);
+
+			(await resolver.next()).settle('/repo');
+			(await resolver.next()).settle('/repo');
+
+			assert.deepStrictEqual(
+				{ outcome: (await route).kind, effects },
+				{ outcome: 'focused-hosted', effects: ['open-owner:2', 'focus-hosted:2'] }
+			);
+		});
 
 		test('two aliases resolved concurrently produce one owner', async () => {
 			const root = await fs.mkdtemp(join(tmpdir(), 'hucode-ownership-'));

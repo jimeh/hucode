@@ -132,6 +132,7 @@ import {
 	type HucodeRegularWorkbenchOpenAttempt,
 	resolveHucodeDesktopWorkbenchPath,
 	resolveHucodeDesktopWorkbenchPaths,
+	routeHucodeDesktopWorkspaceOpen,
 	selectHucodeDesktopRestoreCandidates,
 	transferHucodeDesktopWorkbenchToRegularWindow,
 	validateHucodeDesktopHostedOwnership,
@@ -957,128 +958,70 @@ export class HucodeShellMainService extends Disposable
 				return { kind: 'superseded' };
 			}
 
-			// Every coordinator call below resolves the path after the last
-			// await before it, as the synchronous canonicalization did.
-			const resolveCurrent = () =>
-				resolveHucodeDesktopWorkbenchPath(worktreePath);
-			for (let attempt = 0; attempt < 4; attempt++) {
-				const path = await resolveCurrent();
-				const lookup = this.ownershipCoordinator.lookup(path);
-				if (lookup.kind === 'absent') {
-					if (!projectId) {
-						const target = await ensureHucodeHostedFolderInCatalog(
-							this.projectManagerMainService,
-							URI.file(worktreePath)
-						);
-						if (!canApply()) {
-							return { kind: 'superseded' };
-						}
-						projectId = target.projectId;
-						// The catalog can canonicalize the folder; key
-						// ownership by the path that is actually opened.
-						worktreePath = target.worktreePath;
-						this.globalCatalog = target.catalog;
-						this.synchronizeControllerCatalogs(this.globalCatalog);
-					}
-					const controller = this.getOrCreateController(windowId);
-					await controller.openAdmittedWorkspace(
-						worktreePath,
-						projectId,
+			return await routeHucodeDesktopWorkspaceOpen({
+				coordinator: this.ownershipCoordinator,
+				windowId,
+				worktreePath,
+				projectId,
+				canApply,
+				addFolderToCatalog: async path => {
+					const target = await ensureHucodeHostedFolderInCatalog(
+						this.projectManagerMainService,
+						URI.file(path)
+					);
+					return {
+						worktreePath: target.worktreePath,
+						projectId: target.projectId,
+						apply: () => {
+							this.globalCatalog = target.catalog;
+							this.synchronizeControllerCatalogs(this.globalCatalog);
+						},
+					};
+				},
+				openInRequestingWindow: (path, requestedProjectId) =>
+					this.getOrCreateController(windowId).openAdmittedWorkspace(
+						path,
+						requestedProjectId,
 						canApply,
 						canApply,
 						beforeCreate
-					);
-					if (!canApply()) {
-						return { kind: 'superseded' };
-					}
-					const opened = this.ownershipCoordinator.lookup(
-						await resolveCurrent()
-					);
-					if (opened.kind === 'absent') {
-						return { kind: 'failed' };
-					}
-					if (opened.ownership.owner.kind === 'hosted' &&
-						opened.ownership.owner.windowId === windowId) {
-						this.focusHostedOwnership(opened.ownership);
-						return {
-							kind: 'opened-hosted',
-							ownership: opened.ownership,
-						};
-					}
-					continue;
-				}
-				if (lookup.ownership.phase === 'reserved' ||
-					lookup.ownership.phase === 'transferring') {
-					const pending = this.ownershipCoordinator.reserve(
-						path,
-						{
-							kind: 'hosted',
-							windowId,
-							instanceId: `route:${windowId}`,
-						}
-					);
-					if (pending.kind === 'reserved-conflict') {
-						await pending.settled;
-						continue;
-					}
-					if (pending.kind === 'reserved') {
-						this.ownershipCoordinator.release(pending.reservation);
-						continue;
-					}
-				}
-
-				const owner = lookup.ownership.owner;
-				if (owner.kind === 'regular') {
+					),
+				focusRegularOwner: ownerWindowId => {
 					const window = this.windowsMainService.getWindowById(
-						owner.windowId
+						ownerWindowId
 					);
 					if (!window || window.isOmniWindow) {
-						this.ownershipCoordinator.release({
-							canonicalPath: lookup.ownership.canonicalPath,
-							owner,
-							generation: lookup.ownership.generation,
-						});
-						continue;
+						return false;
 					}
 					window.focus();
-					return {
-						kind: 'focused-regular',
-						ownership: lookup.ownership,
-					};
-				}
-
-				const controller = this.controllers.get(owner.windowId);
-				const instance = validateHucodeDesktopHostedOwnership(
-					this.ownershipCoordinator,
-					lookup.ownership,
-					controller?.getState().instances ?? []
-				);
-				if (!controller || !instance) {
-					continue;
-				}
-				await controller.openAdmittedWorkspace(
-					instance.worktreePath,
-					projectId ?? instance.projectId,
-					canApply,
-					canApply
-				);
-				if (!canApply()) {
-					return { kind: 'superseded' };
-				}
-				const current = this.ownershipCoordinator.lookup(
-					await resolveCurrent()
-				);
-				if (current.kind === 'current-owner' &&
-					current.ownership.owner.kind === 'hosted' &&
-					current.ownership.owner.windowId === owner.windowId) {
-					this.focusHostedOwnership(current.ownership);
-					return {
-						kind: 'focused-hosted',
-						ownership: current.ownership,
-					};
-				}
-			}
-			return { kind: 'superseded' };
+					return true;
+				},
+				openHostedOwner: async (ownership, requestedProjectId) => {
+					if (ownership.owner.kind !== 'hosted') {
+						return false;
+					}
+					const controller = this.controllers.get(
+						ownership.owner.windowId
+					);
+					const instance = validateHucodeDesktopHostedOwnership(
+						this.ownershipCoordinator,
+						ownership,
+						controller?.getState().instances ?? []
+					);
+					if (!controller || !instance) {
+						return false;
+					}
+					await controller.openAdmittedWorkspace(
+						instance.worktreePath,
+						requestedProjectId ?? instance.projectId,
+						canApply,
+						canApply
+					);
+					return true;
+				},
+				focusHostedOwner: ownership =>
+					this.focusHostedOwnership(ownership),
+			});
 		} catch (error) {
 			return { kind: 'failed', error };
 		}
@@ -1456,17 +1399,24 @@ export class HucodeShellMainService extends Disposable
 		instanceId: string,
 		closeHostedOwner: () => Promise<boolean>
 	): Promise<boolean> {
-		const instance = controller.getState().instances.find(candidate =>
-			candidate.instanceId === instanceId &&
-			candidate.state !== 'crashed' &&
-			candidate.state !== 'unloaded'
+		const findInstance = () => controller.getState().instances.find(
+			candidate =>
+				candidate.instanceId === instanceId &&
+				candidate.state !== 'crashed' &&
+				candidate.state !== 'unloaded'
 		);
+		const instance = findInstance();
 		if (!instance) {
 			return false;
 		}
-		const lookup = this.ownershipCoordinator.lookup(
-			await resolveHucodeDesktopWorkbenchPath(instance.worktreePath)
+		const path = await resolveHucodeDesktopWorkbenchPath(
+			instance.worktreePath
 		);
+		// The instance can crash or unload while the path resolves.
+		if (!findInstance()) {
+			return false;
+		}
+		const lookup = this.ownershipCoordinator.lookup(path);
 		if (lookup.kind !== 'current-owner' ||
 			lookup.ownership.owner.kind !== 'hosted' ||
 			lookup.ownership.owner.instanceId !== instanceId) {
