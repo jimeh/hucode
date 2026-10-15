@@ -365,10 +365,7 @@ export class HucodeShellMainService extends Disposable
 			>;
 		}
 	): Promise<HucodeRegularWorkbenchAdmissionOutcome<ICodeWindow>> {
-		const [, path] = await Promise.all([
-			this.reconcileAllRegularWindowOwnership(),
-			resolveHucodeDesktopWorkbenchPath(workbenchPath),
-		]);
+		await this.reconcileAllRegularWindowOwnership();
 		for (const window of this.windowsMainService.getWindows()
 			.filter(candidate => candidate.isOmniWindow)) {
 			await this.getOrCreateController(window.id).ensureRestored();
@@ -377,9 +374,10 @@ export class HucodeShellMainService extends Disposable
 			kind: 'regular' as const,
 			windowId: -(++this.regularAdmissionId),
 		};
+		// The admission resolves the path itself, at each reservation attempt.
 		return admitHucodeRegularWorkbench({
 			coordinator: this.ownershipCoordinator,
-			path,
+			path: workbenchPath,
 			pendingOwner,
 			openRegularWindow: request.openRegularWindow,
 			resolveCurrent: ownership => this.resolveRegularAdmissionOwner(
@@ -894,10 +892,7 @@ export class HucodeShellMainService extends Disposable
 		worktreePath: string,
 		excludedWindowId?: number
 	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
-		const [, path] = await Promise.all([
-			this.reconcileAllRegularWindowOwnership(),
-			resolveHucodeDesktopWorkbenchPath(worktreePath),
-		]);
+		await this.reconcileAllRegularWindowOwnership();
 		const omniWindows = this.windowsMainService.getWindows()
 			.filter(window => window.isOmniWindow)
 			.toSorted((a, b) => b.lastFocusTime - a.lastFocusTime);
@@ -906,7 +901,10 @@ export class HucodeShellMainService extends Disposable
 			await controller.ensureRestored();
 		}
 
-		const lookup = this.ownershipCoordinator.lookup(path);
+		// Resolve after the restore waits, right before the lookup.
+		const lookup = this.ownershipCoordinator.lookup(
+			await resolveHucodeDesktopWorkbenchPath(worktreePath)
+		);
 		if (lookup.kind === 'absent' ||
 			lookup.ownership.owner.kind !== 'hosted' ||
 			lookup.ownership.owner.windowId === excludedWindowId) {
@@ -950,10 +948,7 @@ export class HucodeShellMainService extends Disposable
 		beforeCreate?: () => Promise<void>
 	): Promise<HucodeDesktopWorkbenchRouteOutcome> {
 		try {
-			let [, path] = await Promise.all([
-				this.reconcileAllRegularWindowOwnership(),
-				resolveHucodeDesktopWorkbenchPath(worktreePath),
-			]);
+			await this.reconcileAllRegularWindowOwnership();
 			for (const window of this.windowsMainService.getWindows()
 				.filter(candidate => candidate.isOmniWindow)) {
 				await this.getOrCreateController(window.id).ensureRestored();
@@ -962,7 +957,12 @@ export class HucodeShellMainService extends Disposable
 				return { kind: 'superseded' };
 			}
 
+			// Every coordinator call below resolves the path after the last
+			// await before it, as the synchronous canonicalization did.
+			const resolveCurrent = () =>
+				resolveHucodeDesktopWorkbenchPath(worktreePath);
 			for (let attempt = 0; attempt < 4; attempt++) {
+				const path = await resolveCurrent();
 				const lookup = this.ownershipCoordinator.lookup(path);
 				if (lookup.kind === 'absent') {
 					if (!projectId) {
@@ -974,17 +974,9 @@ export class HucodeShellMainService extends Disposable
 							return { kind: 'superseded' };
 						}
 						projectId = target.projectId;
-						if (target.worktreePath !== worktreePath) {
-							// The catalog can canonicalize the folder; key
-							// ownership by the path that is actually opened.
-							worktreePath = target.worktreePath;
-							path = await resolveHucodeDesktopWorkbenchPath(
-								worktreePath
-							);
-							if (!canApply()) {
-								return { kind: 'superseded' };
-							}
-						}
+						// The catalog can canonicalize the folder; key
+						// ownership by the path that is actually opened.
+						worktreePath = target.worktreePath;
 						this.globalCatalog = target.catalog;
 						this.synchronizeControllerCatalogs(this.globalCatalog);
 					}
@@ -999,7 +991,9 @@ export class HucodeShellMainService extends Disposable
 					if (!canApply()) {
 						return { kind: 'superseded' };
 					}
-					const opened = this.ownershipCoordinator.lookup(path);
+					const opened = this.ownershipCoordinator.lookup(
+						await resolveCurrent()
+					);
 					if (opened.kind === 'absent') {
 						return { kind: 'failed' };
 					}
@@ -1071,7 +1065,9 @@ export class HucodeShellMainService extends Disposable
 				if (!canApply()) {
 					return { kind: 'superseded' };
 				}
-				const current = this.ownershipCoordinator.lookup(path);
+				const current = this.ownershipCoordinator.lookup(
+					await resolveCurrent()
+				);
 				if (current.kind === 'current-owner' &&
 					current.ownership.owner.kind === 'hosted' &&
 					current.ownership.owner.windowId === owner.windowId) {
@@ -1158,20 +1154,20 @@ export class HucodeShellMainService extends Disposable
 	}
 
 	private async inspectOnboardingTarget(worktreePath: string, profileId?: string): Promise<HucodeOnboardingTarget> {
-		const [, path] = await Promise.all([
-			this.reconcileAllRegularWindowOwnership(),
-			resolveHucodeDesktopWorkbenchPath(worktreePath),
-		]);
-		const canonical = path.canonicalPath;
-		const workspace = await resolveOnboardingWorkspaceIdentifier(canonical);
+		await this.reconcileAllRegularWindowOwnership();
 		for (const window of this.windowsMainService.getWindows()) {
 			if (window.isOmniWindow) { await this.getOrCreateController(window.id).ensureRestored(); }
 		}
+		// Resolve after the restore waits and look up in the same turn.
+		const path = await resolveHucodeDesktopWorkbenchPath(worktreePath);
+		const alreadyOpen = this.ownershipCoordinator.lookup(path).kind !== 'absent';
+		const canonical = path.canonicalPath;
+		const workspace = await resolveOnboardingWorkspaceIdentifier(canonical);
 		const associated = this.userDataProfilesMainService.getProfileForWorkspace(workspace);
 		const imported = this.userDataProfilesMainService.profiles.find(profile => profile.id === profileId && !profile.isDefault && !profile.isTransient && !profile.isAgentsWindowProfile);
 		return {
 			worktreePath: canonical,
-			alreadyOpen: this.ownershipCoordinator.lookup(path).kind !== 'absent',
+			alreadyOpen,
 			associatedProfileId: associated?.id,
 			associatedProfileName: associated?.name,
 			importedProfile: imported ? { id: imported.id, name: imported.name } : undefined,

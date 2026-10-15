@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
-import { DeferredPromise } from '../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../base/common/async.js';
 import { Emitter } from '../../../base/common/event.js';
 import { join } from '../../../base/common/path.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
@@ -71,6 +71,26 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		displayPath,
 		canonicalPath: canonicalPath as HucodeCanonicalWorkbenchPath,
 	});
+	/**
+	 * Waits, within a bounded number of microtasks, until an admission that
+	 * resolves its path asynchronously has reserved it.
+	 */
+	const waitForOwnership = async (
+		coordinator: HucodeDesktopWorkbenchOwnershipCoordinator,
+		path: string,
+		condition: () => boolean = () => true
+	): Promise<void> => {
+		for (let attempt = 0; attempt < 50; attempt++) {
+			if (coordinator.lookup(target(path)).kind === 'current-owner' &&
+				condition()) {
+				return;
+			}
+			await Promise.resolve();
+		}
+		assert.fail(
+			`No ownership for ${path}: ${JSON.stringify(coordinator.snapshot())}`
+		);
+	};
 	/** Resolves `/alias` to `/real`, standing in for a symlinked folder. */
 	const aliasTarget = (path: string) =>
 		target(path, path.replace('/alias', '/real'));
@@ -154,7 +174,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 		const routing = admitHucodeRegularWorkbench({
 			coordinator,
-			path: target('/repo'),
+			path: '/repo',
+			resolvePath: async path => target(path),
 			pendingOwner: regular(-1),
 			resolveCurrent: async ownership => {
 				resolutions++;
@@ -255,7 +276,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		const openGate = new Promise<void>(resolve => finishOpen = resolve);
 		const opening = admitHucodeRegularWorkbench({
 			coordinator,
-			path: target('/repo'),
+			path: '/repo',
+			resolvePath: async path => target(path),
 			pendingOwner: regular(-1),
 			resolveCurrent: async () => ({ kind: 'stale' }),
 			openRegularWindow: async () => {
@@ -268,6 +290,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				};
 			},
 		});
+		await waitForOwnership(coordinator, '/repo');
 		const pending = coordinator.lookup(target('/repo'));
 		assert.strictEqual(
 			pending.kind === 'current-owner' && pending.ownership.phase,
@@ -294,7 +317,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				const failure = new Error('load failed');
 				const result = await admitHucodeRegularWorkbench({
 					coordinator,
-					path: target('/repo'),
+					path: '/repo',
+					resolvePath: async path => target(path),
 					pendingOwner: regular(-1),
 					resolveCurrent: async () => ({ kind: 'stale' }),
 					openRegularWindow: async () => kind === 'vetoed'
@@ -321,7 +345,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 		const result = await admitHucodeRegularWorkbench({
 			coordinator,
-			path: target('/repo'),
+			path: '/repo',
+			resolvePath: async path => target(path),
 			pendingOwner: regular(-1),
 			resolveCurrent: async () => ({ kind: 'stale' }),
 			openRegularWindow: async () => { throw failure; },
@@ -367,7 +392,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			const coordinator = createCoordinator();
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: target('/repo'),
+				path: '/repo',
+				resolvePath: async path => target(path),
 				pendingOwner: regular(-1),
 				resolveCurrent: async () => ({ kind: 'stale' }),
 				openRegularWindow: async () => {
@@ -413,7 +439,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			let opened = false;
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: aliasTarget('/alias/repo'),
+				path: '/alias/repo',
+				resolvePath: async path => aliasTarget(path),
 				pendingOwner: regular(-1),
 				resolveCurrent: async ownership => {
 					assert.strictEqual(ownership.displayPath, '/real/repo');
@@ -451,7 +478,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				let resolutions = 0;
 				const result = await admitHucodeRegularWorkbench({
 					coordinator,
-					path: target('/repo'),
+					path: '/repo',
+					resolvePath: async path => target(path),
 					pendingOwner: regular(-1),
 					resolveCurrent: async ownership => {
 						resolutions++;
@@ -492,7 +520,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			let opened = false;
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: target('/repo'),
+				path: '/repo',
+				resolvePath: async path => target(path),
 				pendingOwner: regular(-1),
 				resolveCurrent: async ownership => {
 					if (firstResolution) {
@@ -548,7 +577,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: target('/repo'),
+				path: '/repo',
+				resolvePath: async path => target(path),
 				pendingOwner: regular(-1),
 				resolveCurrent: async ownership => {
 					resolutions++;
@@ -614,7 +644,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			let regularOpenCount = 0;
 			const opening = admitHucodeRegularWorkbench({
 				coordinator,
-				path: target('/repo'),
+				path: '/repo',
+				resolvePath: async path => target(path),
 				pendingOwner: regular(-1),
 				resolveCurrent: async () => ({
 					kind: 'focused-regular',
@@ -637,7 +668,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			});
 			const competing = admitHucodeRegularWorkbench({
 				coordinator,
-				path: target('/repo'),
+				path: '/repo',
+				resolvePath: async path => target(path),
 				pendingOwner: regular(-2),
 				resolveCurrent: async () => ({
 					kind: 'focused-regular',
@@ -650,6 +682,11 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 					return { kind: 'failed' };
 				},
 			});
+			await waitForOwnership(
+				coordinator,
+				'/repo',
+				() => regularOpenCount === 1
+			);
 
 			coordinator.reconcile(
 				owner => owner.kind === 'regular' && owner.windowId === 7,
@@ -717,7 +754,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			const open = (path: string, pendingWindowId: number) =>
 				admitHucodeRegularWorkbench({
 					coordinator,
-					path: target(path),
+					path: path,
+					resolvePath: async path => target(path),
 					pendingOwner: regular(pendingWindowId),
 					resolveCurrent: async () => ({ kind: 'stale' }),
 					openRegularWindow: () => loads.run(7, async () => {
@@ -1727,7 +1765,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			};
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: target('/repo'),
+				path: '/repo',
+				resolvePath: async path => target(path),
 				pendingOwner: regular(-1),
 				resolveCurrent: async ownership => {
 					resolutions++;
@@ -1972,7 +2011,9 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				const alpha = resolver.take();
 				const bravo = resolver.take();
 				alpha.settle('/alpha');
-				await Promise.resolve();
+				// A macrotask turn drains every microtask, so a per-window
+				// reconcile would have applied alpha's claim by now.
+				await timeout(0);
 				assert.deepStrictEqual(coordinator.snapshot(), []);
 				bravo.settle('/bravo');
 				await reconciling;
@@ -1982,6 +2023,86 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 					[regular(1), regular(2)]
 				);
 				reconciler.dispose();
+			});
+
+		test('a reconcile whose window changed workspace during resolution seeds nothing',
+			async () => {
+				const coordinator = createCoordinator();
+				const resolver = createHeldResolver();
+				const reconciler = createReconciler(coordinator, resolver.resolve);
+				const window: ITestRegularWindow = {
+					id: 7,
+					workspacePath: '/before',
+					current: true,
+				};
+
+				const reconciling = reconciler.reconcile(window);
+				const resolution = resolver.take();
+				window.workspacePath = '/after';
+				resolution.settle('/before');
+				await reconciling;
+
+				assert.deepStrictEqual(coordinator.snapshot(), []);
+				reconciler.dispose();
+			});
+
+		test('a reconcile that resolves after disposal seeds nothing',
+			async () => {
+				const coordinator = createCoordinator();
+				const resolver = createHeldResolver();
+				const reconciler = createReconciler(coordinator, resolver.resolve);
+				const window: ITestRegularWindow = {
+					id: 7,
+					workspacePath: '/repo',
+					current: true,
+				};
+
+				const reconciling = reconciler.reconcile(window);
+				const resolution = resolver.take();
+				reconciler.dispose();
+				resolution.settle('/repo');
+				await reconciling;
+
+				assert.deepStrictEqual(coordinator.snapshot(), []);
+			});
+
+		test('regular admission resolves its path at each reservation attempt',
+			async () => {
+				const coordinator = createCoordinator();
+				const targets = new Map([['/link', '/real/old']]);
+				const blocker = coordinator.reserve(
+					target('/real/old'),
+					hosted(1, 'blocker')
+				);
+				assert.strictEqual(blocker.kind, 'reserved');
+				const admission = admitHucodeRegularWorkbench({
+					coordinator,
+					path: '/link',
+					resolvePath: async path => target(path, targets.get(path)),
+					pendingOwner: regular(-1),
+					resolveCurrent: async () => assert.fail('no current owner'),
+					openRegularWindow: async () => ({
+						kind: 'committed',
+						windowId: 7,
+						value: 'window-7',
+						filesDelivered: false,
+					}),
+				});
+				// Let the admission reach its wait on the blocked target.
+				await timeout(0);
+				targets.set('/link', '/real/new');
+				if (blocker.kind === 'reserved') {
+					coordinator.release(blocker.reservation);
+				}
+				await admission;
+
+				assert.deepStrictEqual(
+					coordinator.snapshot().map(ownership => ({
+						canonicalPath: ownership.canonicalPath,
+						owner: ownership.owner,
+					})),
+					[{ canonicalPath: '/real/new', owner: regular(7) }]
+				);
 			});
 
 		test('two aliases resolved concurrently produce one owner', async () => {
@@ -2063,23 +2184,71 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 					{ pathsEqual, isCaseSensitive: true }
 				);
 
+				/**
+				 * The previous per-candidate arbitration: rebuild every
+				 * window's claims for each candidate, then find its winner by
+				 * comparing synchronously canonicalized paths.
+				 */
+				const perCandidateOracle = (
+					windowId: number,
+					candidate: { path: string; stableInstanceId: string }
+				): boolean => {
+					const canonical = (path: string) => aliasTarget(path).canonicalPath;
+					const claims = source.windows.flatMap(window =>
+						createHucodeDesktopRestoreCandidates({
+							windowId: window.windowId,
+							windowLastFocusTime: window.windowLastFocusTime,
+							residentWorkspaces: window.residentWorkspaces,
+							retainedWorkbenches:
+								projectHucodeDesktopRetainedRestoreWorkbenches({
+									globalWorkbenches: source.globalWorkbenches,
+									overlays: window.overlays,
+									legacyRetainedWorkbenches:
+										window.retainedWorkbenches,
+									pendingAdoptions: window.pendingAdoptions,
+								}, aliasTarget, pathsEqual),
+						}, aliasTarget, pathsEqual)
+					);
+					const winner = Array.from(selectHucodeDesktopRestoreWinners(
+						claims,
+						aliasTarget,
+						{ isCaseSensitive: true }
+					).values()).find(entry =>
+						canonical(entry.path) === canonical(candidate.path)
+					);
+					if (winner?.windowId !== windowId) {
+						return false;
+					}
+					if (winner.stableInstanceId === candidate.stableInstanceId) {
+						return true;
+					}
+					return !!source.windows.find(window =>
+						window.windowId === windowId
+					)?.pendingAdoptions.some(pending =>
+						pending.desiredState === 'loaded' &&
+						pathsEqual(pending.path, candidate.path)
+					);
+				};
+				const firstCandidates = [
+					{ path: '/alias/repo', stableInstanceId: 'project:project:/alias/repo' },
+					{ path: '/only-one', stableInstanceId: 'project:only:/only-one' },
+					{ path: '/alias/scratch', stableInstanceId: 'retained:global' },
+				];
+				const secondCandidates = [
+					{ path: '/real/repo', stableInstanceId: 'project:project:/real/repo' },
+					{ path: '/alias/repo', stableInstanceId: 'project:project:/alias/repo' },
+					{ path: '/real/scratch', stableInstanceId: 'retained:legacy' },
+					{ path: '/real/adopted', stableInstanceId: 'retained:adopted' },
+				];
+
 				assert.deepStrictEqual({
-					first: select(1, [
-						{ path: '/alias/repo', stableInstanceId: 'project:project:/alias/repo' },
-						{ path: '/only-one', stableInstanceId: 'project:only:/only-one' },
-						{ path: '/alias/scratch', stableInstanceId: 'retained:global' },
-					]),
-					second: select(2, [
-						{ path: '/real/repo', stableInstanceId: 'project:project:/real/repo' },
-						{ path: '/alias/repo', stableInstanceId: 'project:project:/alias/repo' },
-						{ path: '/real/scratch', stableInstanceId: 'retained:legacy' },
-						{ path: '/real/adopted', stableInstanceId: 'retained:adopted' },
-					]),
+					first: select(1, firstCandidates),
+					second: select(2, secondCandidates),
 				}, {
-					// Aliases share one winner: the more recent window 2 resident.
-					first: [false, true, true],
-					// A non-winning ID still wins through a loaded pending adoption.
-					second: [true, false, false, true],
+					first: firstCandidates.map(candidate =>
+						perCandidateOracle(1, candidate)),
+					second: secondCandidates.map(candidate =>
+						perCandidateOracle(2, candidate)),
 				});
 			});
 	});

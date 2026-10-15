@@ -625,7 +625,9 @@ export function waitForHucodeRegularWindowTargetCommit<T>(options: {
 
 export interface IHucodeRegularWorkbenchAdmissionDelegate<T> {
 	readonly coordinator: HucodeDesktopWorkbenchOwnershipCoordinator;
-	readonly path: IHucodeDesktopWorkbenchPath;
+	readonly path: string;
+	/** Resolves `path` before each reservation attempt. */
+	resolvePath?(path: string): Promise<IHucodeDesktopWorkbenchPath>;
 	readonly pendingOwner: Extract<
 		HucodeDesktopWorkbenchOwner,
 		{ readonly kind: 'regular' }
@@ -644,9 +646,12 @@ export interface IHucodeRegularWorkbenchAdmissionDelegate<T> {
 export async function admitHucodeRegularWorkbench<T>(
 	delegate: IHucodeRegularWorkbenchAdmissionDelegate<T>
 ): Promise<HucodeRegularWorkbenchAdmissionOutcome<T>> {
+	const resolvePath = delegate.resolvePath ?? resolveHucodeDesktopWorkbenchPath;
 	while (true) {
+		// Resolve at each attempt, after every wait, so a symlink retargeted
+		// while this admission waited is admitted under its current target.
 		const admission = delegate.coordinator.reserve(
-			delegate.path,
+			await resolvePath(delegate.path),
 			delegate.pendingOwner,
 			{ routeRecoveringOwner: true }
 		);

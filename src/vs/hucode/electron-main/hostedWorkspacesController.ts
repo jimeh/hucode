@@ -1201,8 +1201,17 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (this.isRestoreAbandoned()) {
 			return;
 		}
+		// A catalog synchronization during the awaits above can remap a
+		// record to its global id or drop it. Act on each candidate's current
+		// record, and skip one that vanished or is no longer desired loaded.
 		const retainedCandidates = retainedRecords.flatMap(
-			({ record, worktreePath }, index) => {
+			({ record: snapshot, worktreePath }, index) => {
+				const record = this.retainedWorkbenches.getByUri(
+					URI.revive(snapshot.folderUri)
+				);
+				if (record?.desiredState !== 'loaded') {
+					return [];
+				}
 				if (!selected[index]) {
 					this.retainedWorkbenches.update(record.id, {
 						desiredState: 'unloaded',

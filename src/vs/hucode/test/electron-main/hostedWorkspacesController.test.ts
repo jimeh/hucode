@@ -615,6 +615,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		) => boolean;
 		readonly resolvePath?: IResidentHostedWorkspacesControllerOptions[
 		'resolvePath'];
+		readonly selectRestoreCandidates?: IResidentHostedWorkspacesControllerOptions[
+		'selectRestoreCandidates'];
 		readonly beforeRestore?: () => Promise<void>;
 		readonly activateApplication?: () => void;
 		readonly stat?: IResidentHostedWorkspacesControllerOptions['stat'];
@@ -746,9 +748,10 @@ suite('ResidentHostedWorkspacesController', () => {
 					options.overlayCaptureSettleTimeoutMs,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
-				selectRestoreCandidates: options.shouldRestoreCandidate &&
-					(async candidates =>
-						candidates.map(options.shouldRestoreCandidate!)),
+				selectRestoreCandidates: options.selectRestoreCandidates ??
+					(options.shouldRestoreCandidate &&
+						(async candidates =>
+							candidates.map(options.shouldRestoreCandidate!))),
 				resolvePath: options.resolvePath ??
 					(async path => resolvedPath(path)),
 				beforeRestore: options.beforeRestore,
@@ -8034,6 +8037,202 @@ suite('ResidentHostedWorkspacesController', () => {
 					instances: controller.getState().instances,
 					views: viewFactory.views.length,
 				}, { owners: [], instances: [], views: 0 });
+			});
+
+		/** Holds every restore path resolution until the test releases them. */
+		function createHeldRestoreResolution() {
+			const gate = new DeferredPromise<void>();
+			const calls: string[] = [];
+			return {
+				calls,
+				release: () => gate.complete(),
+				resolvePath: async (path: string) => {
+					calls.push(path);
+					await gate.p;
+					return resolvedPath(path);
+				},
+				async started(count: number): Promise<void> {
+					for (let attempt = 0; attempt < 100 &&
+						calls.length < count; attempt++) {
+						await timeout(0);
+					}
+					assert.strictEqual(calls.length, count);
+				},
+			};
+		}
+
+		function catalogWith(
+			workbenches: readonly { readonly id: string; readonly path: string }[]
+		): ProjectCatalogSnapshot {
+			return {
+				epoch: 'test',
+				revision: 1,
+				projects: [],
+				workbenches: workbenches.map((workbench, order) => ({
+					id: workbench.id,
+					folderUri: URI.file(workbench.path),
+					order,
+				})),
+			};
+		}
+
+		test('a catalog remap during restore resolution still unloads a losing record',
+			async () => {
+				const scratch = createWorktree('restore-remap-loser');
+				const resolution = createHeldRestoreResolution();
+				const { controller, viewFactory } = createController({
+					activeWorktreePath: scratch,
+					retainedWorkbenches: [{
+						id: 'local',
+						folderUri: URI.file(scratch).toJSON(),
+						desiredState: 'loaded',
+						order: 0,
+					}],
+					shouldRestoreCandidate: () => false,
+					resolvePath: resolution.resolvePath,
+				});
+
+				const restoring = controller.ensureRestored();
+				await resolution.started(1);
+				controller.synchronizeGlobalWorkbenchCatalog(
+					catalogWith([{ id: 'global', path: scratch }])
+				);
+				resolution.release();
+				await restoring;
+
+				assert.deepStrictEqual({
+					retained: controller.getState().retainedWorkbenches?.map(
+						record => ({
+							id: record.id,
+							desiredState: record.desiredState,
+						})
+					),
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+				}, {
+					retained: [{ id: 'global', desiredState: 'unloaded' }],
+					instances: [],
+					views: 0,
+				});
+			});
+
+		test('a catalog drop during restore resolution restores no orphan instance',
+			async () => {
+				const scratch = createWorktree('restore-drop');
+				const resolution = createHeldRestoreResolution();
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					activeWorktreePath: scratch,
+					retainedWorkbenches: [{
+						id: 'local',
+						folderUri: URI.file(scratch).toJSON(),
+						desiredState: 'loaded',
+						order: 0,
+					}],
+					ownershipCoordinator,
+					resolvePath: resolution.resolvePath,
+				});
+
+				const restoring = controller.ensureRestored();
+				await resolution.started(1);
+				controller.synchronizeGlobalWorkbenchCatalog(catalogWith([]));
+				resolution.release();
+				await restoring;
+
+				assert.deepStrictEqual({
+					retained: controller.getState().retainedWorkbenches,
+					instances: controller.getState().instances,
+					owners: ownershipCoordinator.snapshot(),
+					views: viewFactory.views.length,
+				}, { retained: [], instances: [], owners: [], views: 0 });
+			});
+
+		test('disposal during restore candidate selection leaves no reservations',
+			async () => {
+				const alpha = createWorktree('restore-selection-dispose-alpha');
+				const bravo = createWorktree('restore-selection-dispose-bravo');
+				const selectionGate = new DeferredPromise<void>();
+				let selecting = false;
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					restoreEntries: [
+						{ worktreePath: alpha, projectId: 'project-alpha' },
+						{ worktreePath: bravo, projectId: 'project-bravo' },
+					],
+					activeWorktreePath: alpha,
+					restorePolicy: 'all',
+					ownershipCoordinator,
+					selectRestoreCandidates: async candidates => {
+						selecting = true;
+						await selectionGate.p;
+						return candidates.map(() => true);
+					},
+				});
+
+				const restoring = controller.ensureRestored();
+				for (let attempt = 0; attempt < 100 && !selecting; attempt++) {
+					await timeout(0);
+				}
+				assert.strictEqual(selecting, true);
+				controller.dispose();
+				selectionGate.complete();
+				await restoring;
+
+				assert.deepStrictEqual({
+					owners: ownershipCoordinator.snapshot(),
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+				}, { owners: [], instances: [], views: 0 });
+			});
+
+		test('selective restore maps decisions across retained and project candidates',
+			async () => {
+				const retainedKept = createWorktree('mixed-retained-kept');
+				const retainedLost = createWorktree('mixed-retained-lost');
+				const projectKept = createWorktree('mixed-project-kept');
+				const projectLost = createWorktree('mixed-project-lost');
+				const kept = new Set([retainedKept, projectKept]);
+				const { controller } = createController({
+					restoreEntries: [
+						{ worktreePath: projectLost, projectId: 'project-lost' },
+						{ worktreePath: projectKept, projectId: 'project-kept' },
+					],
+					// Retained decisions [kept, lost] and project decisions
+					// [lost, kept] differ, so an offset error changes the result.
+					retainedWorkbenches: [{
+						id: 'retained-kept',
+						folderUri: URI.file(retainedKept).toJSON(),
+						desiredState: 'loaded',
+						order: 0,
+					}, {
+						id: 'retained-lost',
+						folderUri: URI.file(retainedLost).toJSON(),
+						desiredState: 'loaded',
+						order: 1,
+					}],
+					activeWorktreePath: projectKept,
+					restorePolicy: 'all',
+					shouldRestoreCandidate: candidate => kept.has(candidate.path),
+				});
+
+				await controller.ensureRestored();
+
+				assert.deepStrictEqual({
+					instances: controller.getState().instances
+						.map(instance => instance.worktreePath)
+						.toSorted(),
+					retained: controller.getState().retainedWorkbenches?.map(
+						record => [record.id, record.desiredState]
+					),
+				}, {
+					instances: [projectKept, retainedKept].toSorted(),
+					retained: [
+						['retained-kept', 'loaded'],
+						['retained-lost', 'unloaded'],
+					],
+				});
 			});
 
 		test('suspend hands ownership from release to seed without an await',
