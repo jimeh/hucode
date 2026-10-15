@@ -117,6 +117,7 @@
 		"src/vs/platform/extensionManagement/test/node/hucodeOpenVsxExtensionSignatureVerifier.test.ts",
 		"src/vs/platform/product/test/common/hucodeProductVersion.test.ts",
 		"src/vs/platform/projectManager/test/common/projectManagerState.test.ts",
+		"src/vs/platform/projectManager/test/node/hucodeNodeGitMetadataWatcher.test.ts",
 		"src/vs/platform/update/test/common/hucodeUpdateVersion.test.ts",
 		"src/vs/platform/window/test/common/hucodeHostedShellActions.test.ts",
 		"src/vs/platform/window/test/common/hucodeHostedShellService.test.ts",

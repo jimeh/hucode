@@ -67,6 +67,10 @@ export interface HucodeWebUserDataServerOptions {
 	readonly leaseMs?: number;
 	/** Internal test hook for pausing a fully staged upload before its lease refresh. */
 	readonly beforeUploadLeaseRefresh?: () => Promise<void>;
+	/** Internal test hook for pausing a commit after its lease and upload checks, before its first removal. */
+	readonly beforeCommitRemoval?: () => Promise<void>;
+	/** Internal test hook for pausing or failing WebUser directory initialization. */
+	readonly beforeInitialize?: () => Promise<void>;
 }
 
 export const IHucodeWebUserDataServer = createDecorator<IHucodeWebUserDataServer>('hucodeWebUserDataServer');
@@ -123,6 +127,8 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	private closed = false;
 	private disposeStarted = false;
 	private closePromise: Promise<void> | undefined;
+	private initialized = false;
+	private initialization: Promise<void> | undefined;
 
 	constructor(
 		userDataPath: string,
@@ -142,8 +148,8 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		this.stagingHome = join(this.webUserHome, '.staging');
 
 		if (this.enabled) {
-			// eslint-disable-next-line local/code-no-sync-fs -- TODO: add an awaited initialization boundary; the profile catalog and storage host constructed next require the WebUser directory.
-			fs.mkdirSync(this.webUserHome, { recursive: true, mode: 0o700 });
+			// Neither constructor touches the filesystem. Every operation that
+			// does awaits whenInitialized(), which creates the WebUser directory.
 			this.profilesService = this._register(new HucodeWebUserDataProfilesService(
 				this.webUserHome,
 				environmentService,
@@ -156,8 +162,13 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 				id => this.profilesService!.isKnownProfile(id),
 				logService,
 				options.acquireOperationLease,
+				() => this.whenStorageReady(),
 			));
 			this.storageChannel = this.storageHost.createChannel<RemoteAgentConnectionContext>();
+			// Start initialization now so the catalog cache is usually warm before
+			// the first synchronous storage listener. Failures surface, and are
+			// retried, through the operations that await it.
+			void this.whenInitialized().catch(() => undefined);
 		}
 	}
 
@@ -218,9 +229,9 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 				if (req.method === 'GET' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/bootstrap`) {
 					const result = await this.queueOperation(async () => {
 						await this.recoverExpiredLease();
-						const manifest = this.readManifest();
+						const manifest = await this.readManifest();
 						if (manifest?.state === 'ready') {
-							this.profilesService!.assertCatalogReady();
+							await this.profilesService!.ensureCatalogReady();
 						}
 						return {
 							state: manifest?.state ?? 'uninitialized',
@@ -294,6 +305,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			this.closing = true;
 			this.closePromise = (async () => {
 				await this.operations.whenIdle();
+				await this.initialization?.catch(() => undefined);
 				const errors: unknown[] = [];
 				const handleResults = await Promise.allSettled(this.closeFileSystemChannels.map(close => close()));
 				for (const result of handleResults) {
@@ -303,6 +315,11 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 				}
 				try {
 					await this.storageHost?.close();
+				} catch (error) {
+					errors.push(error);
+				}
+				try {
+					await this.profilesService?.flushCatalogWrites();
 				} catch (error) {
 					errors.push(error);
 				}
@@ -340,11 +357,47 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		const lease = this.options.acquireOperationLease?.();
 		return this.operations.queue(async () => {
 			try {
+				await this.whenInitialized();
 				return await operation();
 			} finally {
 				lease?.dispose();
 			}
 		}) as Promise<T>;
+	}
+
+	/**
+	 * Creates the WebUser directory and warms the profile catalog cache. A
+	 * failed directory creation rejects the waiting operation and is retried by
+	 * the next one; a missing or unreadable catalog is reported by the
+	 * operations that need it.
+	 */
+	private whenInitialized(): Promise<void> {
+		if (this.initialized) {
+			return Promise.resolve();
+		}
+		this.initialization ??= (async () => {
+			try {
+				await this.options.beforeInitialize?.();
+				await fs.promises.mkdir(this.webUserHome, { recursive: true, mode: 0o700 });
+				this.initialized = true;
+			} finally {
+				if (!this.initialized) {
+					this.initialization = undefined;
+				}
+			}
+			await this.profilesService?.loadCatalog().catch(() => undefined);
+		})();
+		return this.initialization;
+	}
+
+	/**
+	 * Readiness for state storage operations. Profile databases are validated
+	 * synchronously against the catalog cache, so retry a catalog load that has
+	 * not succeeded yet.
+	 */
+	private async whenStorageReady(): Promise<void> {
+		await this.whenInitialized();
+		await this.profilesService?.loadCatalog().catch(() => undefined);
 	}
 
 	private runFileOperation<T>(resources: readonly URI[], operation: () => Promise<T>): Promise<T> {
@@ -370,7 +423,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 
 	private async claim(): Promise<{ claimed: boolean; owner?: string; generation: number; expiresAt?: number }> {
 		await this.recoverExpiredLease();
-		const current = this.readManifest();
+		const current = await this.readManifest();
 		if (current?.state === 'ready' || current?.state === 'staging') {
 			return { claimed: false, generation: current.generation, expiresAt: current.lease?.expiresAt };
 		}
@@ -389,7 +442,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	}
 
 	private async upload(owner: unknown, generation: unknown, migration: HucodeWebUserDataMigration | undefined): Promise<void> {
-		const manifest = this.assertLease(owner, generation);
+		const manifest = await this.assertLease(owner, generation);
 		if (!migration || !Array.isArray(migration.files) || !Array.isArray(migration.profiles) || !Array.isArray(migration.state)) {
 			throw new HucodeWebUserDataRequestError('Invalid migration payload.');
 		}
@@ -437,7 +490,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		}
 
 		await this.options.beforeUploadLeaseRefresh?.();
-		const current = this.readManifest();
+		const current = await this.readManifest();
 		if (current?.state !== 'staging' || !current.lease || current.generation !== manifest.generation || current.lease.owner !== manifest.lease?.owner) {
 			throw new HucodeWebUserDataRequestError('Migration lease or generation does not match.');
 		}
@@ -448,24 +501,26 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	}
 
 	private async renew(owner: unknown, generation: unknown): Promise<{ generation: number; expiresAt: number }> {
-		const manifest = this.assertLease(owner, generation);
+		const manifest = await this.assertLease(owner, generation);
 		const expiresAt = this.now() + this.leaseMs;
 		await this.writeManifest({ ...manifest, lease: { owner: manifest.lease!.owner, expiresAt } });
 		return { generation: manifest.generation, expiresAt };
 	}
 
 	private async commit(owner: unknown, generation: unknown): Promise<{ committed: boolean; generation: number; profiles?: readonly IUserDataProfile[] }> {
-		const manifest = this.readManifest();
+		// Every caller runs inside queueOperation, so no other lease operation
+		// can interleave between the lease assertion and the removals below.
+		const manifest = await this.readManifest();
 		if (manifest?.state === 'ready') {
-			this.profilesService!.assertCatalogReady();
+			await this.profilesService!.ensureCatalogReady();
 			return { committed: false, generation: manifest.generation, profiles: this.profilesService!.profiles };
 		}
-		const claimed = this.assertLease(owner, generation);
+		const claimed = await this.assertLease(owner, generation);
 		const stage = join(this.stagingHome, claimed.lease!.owner);
-		// eslint-disable-next-line local/code-no-sync-fs -- TODO: lease validation and the destructive commit sequence assume no interleaving before the first removal; convert together with readManifest.
-		if (!fs.existsSync(join(stage, 'profiles.json'))) {
+		if (!await pathExists(join(stage, 'profiles.json'))) {
 			throw new HucodeWebUserDataRequestError('Migration upload is incomplete.');
 		}
+		await this.options.beforeCommitRemoval?.();
 
 		await fs.promises.rm(this.userHome, { recursive: true, force: true });
 		await fs.promises.rm(this.stateHome, { recursive: true, force: true });
@@ -487,16 +542,16 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			lastMigrationAt: new Date().toISOString(),
 		});
 		await fs.promises.rm(this.stagingHome, { recursive: true, force: true });
-		this.profilesService!.reload();
+		await this.profilesService!.reload();
 		return { committed: true, generation: claimed.generation, profiles: this.profilesService!.profiles };
 	}
 
 	private async initializeEmpty(): Promise<{ committed: boolean; generation: number; profiles?: readonly IUserDataProfile[] }> {
 		await this.recoverExpiredLease();
-		const current = this.readManifest();
+		const current = await this.readManifest();
 		if (current?.state === 'ready' || current?.state === 'staging') {
 			if (current.state === 'ready') {
-				this.profilesService!.assertCatalogReady();
+				await this.profilesService!.ensureCatalogReady();
 			}
 			return { committed: false, generation: current.generation, profiles: current.state === 'ready' ? this.profilesService!.profiles : undefined };
 		}
@@ -506,15 +561,15 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	}
 
 	private async reset(): Promise<{ reset: true; generation: number; profiles: readonly IUserDataProfile[] }> {
-		const manifest = this.readManifest();
+		const manifest = await this.readManifest();
 		if (manifest?.state !== 'ready') {
 			throw new HucodeWebUserDataRequestError('Server user data must be initialized before it can be reset.');
 		}
-		this.profilesService!.assertCatalogReady();
+		await this.profilesService!.ensureCatalogReady();
 		await this.storageHost!.reset();
 		await fs.promises.rm(this.userHome, { recursive: true, force: true });
 		await fs.promises.mkdir(this.userHome, { recursive: true, mode: 0o700 });
-		this.profilesService!.importCatalog({ profiles: [], associations: {} });
+		await this.profilesService!.importCatalog({ profiles: [], associations: {} });
 		const generation = manifest.generation + 1;
 		await this.writeManifest({
 			version: MANIFEST_VERSION,
@@ -526,8 +581,8 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		return { reset: true, generation, profiles: this.profilesService!.profiles };
 	}
 
-	private assertLease(owner: unknown, generation: unknown): HucodeWebUserDataManifest {
-		const manifest = this.readManifest();
+	private async assertLease(owner: unknown, generation: unknown): Promise<HucodeWebUserDataManifest> {
+		const manifest = await this.readManifest();
 		if (manifest?.state !== 'staging' || typeof owner !== 'string' || owner !== manifest.lease?.owner || generation !== manifest.generation) {
 			throw new HucodeWebUserDataRequestError('Migration lease or generation does not match.');
 		}
@@ -538,7 +593,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	}
 
 	private async recoverExpiredLease(): Promise<void> {
-		const manifest = this.readManifest();
+		const manifest = await this.readManifest();
 		if (manifest?.state !== 'staging' || (manifest.lease?.expiresAt ?? 0) > this.now()) {
 			return;
 		}
@@ -546,10 +601,13 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		await fs.promises.rm(this.manifestPath, { force: true });
 	}
 
-	private readManifest(): HucodeWebUserDataManifest | undefined {
+	/**
+	 * Reads the manifest. Callers run inside queueOperation, which serializes
+	 * every manifest reader and writer.
+	 */
+	private async readManifest(): Promise<HucodeWebUserDataManifest | undefined> {
 		try {
-			// eslint-disable-next-line local/code-no-sync-fs -- TODO: lease checks read and act on the manifest within one synchronous turn; converting needs serialized manifest operations.
-			const manifest = JSON.parse(fs.readFileSync(this.manifestPath, 'utf8')) as HucodeWebUserDataManifest;
+			const manifest = JSON.parse(await fs.promises.readFile(this.manifestPath, 'utf8')) as HucodeWebUserDataManifest;
 			if (manifest.version !== MANIFEST_VERSION || !['staging', 'ready'].includes(manifest.state) || !Number.isSafeInteger(manifest.generation)) {
 				throw new Error('Unsupported or corrupt serve-web user-data manifest.');
 			}
@@ -780,6 +838,20 @@ async function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
 		return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
 	} catch {
 		throw new HucodeWebUserDataRequestError('Invalid JSON request body.');
+	}
+}
+
+/** Resolves whether a path exists, treating only a missing path as absent. */
+async function pathExists(path: string): Promise<boolean> {
+	try {
+		await fs.promises.stat(path);
+		return true;
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === 'ENOENT' || code === 'ENOTDIR') {
+			return false;
+		}
+		throw error;
 	}
 }
 

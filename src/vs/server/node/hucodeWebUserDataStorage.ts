@@ -44,6 +44,8 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 		private readonly isKnownProfile: (id: string) => boolean,
 		private readonly logService: ILogService,
 		private readonly acquireOperationLease?: () => IDisposable,
+		/** Awaited inside each admitted operation before it touches the state directory. */
+		private readonly whenReady?: () => Promise<void>,
 	) {
 		super();
 	}
@@ -151,6 +153,7 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 		const lease = this.acquireOperationLease?.();
 		return this.operations.queue(async () => {
 			try {
+				await this.whenReady?.();
 				return await operation();
 			} finally {
 				lease?.dispose();
