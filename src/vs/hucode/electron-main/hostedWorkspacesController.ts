@@ -2262,14 +2262,17 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 		const pendingInstance =
 			this.hostedWorkspaces.getInstanceByPath(worktreePath);
-		if (pendingInstance && !pendingInstance.disposed && (
-			pendingInstance.state === 'loading' ||
-			pendingInstance.state === 'loaded' ||
-			pendingInstance.state === 'active'
-		)) {
-			// A concurrent open attached this path during the stat. Leave its
-			// live workbench alone rather than replacing or destroying it.
-			return undefined;
+		if (pendingInstance && this.isLiveInstance(pendingInstance)) {
+			// A concurrent open attached this path during the stat. Join its
+			// live workbench, even after a late missing-folder result, rather
+			// than replacing or destroying it.
+			return this.joinConcurrentLiveInstance(
+				pendingInstance,
+				projectId,
+				makeActive,
+				activationIntent,
+				canActivate
+			);
 		}
 		if (!workspaceFolderStat) {
 			if (pendingInstance) {
@@ -2337,6 +2340,22 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (instance.ownership) {
 			this.ownershipCoordinator.markRecovering(instance.ownership);
 		} else if (!await this.reserveInstanceOwnership(instance)) {
+			// A concurrent open in this window can win the reservation while
+			// this one waits; join its live workbench instead of reporting a
+			// conflict with another owner.
+			const concurrent =
+				this.hostedWorkspaces.getInstanceByPath(worktreePath);
+			if (concurrent && concurrent !== instance &&
+				this.isLiveInstance(concurrent) &&
+				!this.shuttingDown && !this._store.isDisposed && canApply()) {
+				return this.joinConcurrentLiveInstance(
+					concurrent,
+					projectId,
+					makeActive,
+					activationIntent,
+					canActivate
+				);
+			}
 			this.markRetainedWorkbenchOwnershipConflict(worktreePath);
 			this.emitState();
 			return undefined;
@@ -2477,6 +2496,39 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			});
 			throw error;
 		}
+	}
+
+	private isLiveInstance(instance: IHostedWorkbenchInstance): boolean {
+		return !instance.disposed && (
+			instance.state === 'loading' ||
+			instance.state === 'loaded' ||
+			instance.state === 'active'
+		);
+	}
+
+	/**
+	 * Joins a live instance that a concurrent open for the same path attached
+	 * while this open was waiting, the way openAdmittedWorkspace treats an
+	 * existing live instance. The concurrent open's own activation is stale
+	 * once this open's newer intent exists, so this open must activate it.
+	 */
+	private joinConcurrentLiveInstance(
+		instance: IHostedWorkbenchInstance,
+		projectId: string | undefined,
+		makeActive: boolean,
+		activationIntent: number | undefined,
+		canActivate: () => boolean
+	): IHostedWorkbenchInstance {
+		instance.projectId = projectId ?? instance.projectId;
+		if (makeActive && canActivate() && (
+			activationIntent === undefined ||
+			activationIntent === this.activationIntentGeneration
+		)) {
+			this.activateInstance(instance, activationIntent);
+		} else {
+			this.emitState();
+		}
+		return instance;
 	}
 
 	private async attachInstance(

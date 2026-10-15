@@ -6898,6 +6898,19 @@ suite('ResidentHostedWorkspacesController', () => {
 			}));
 		}
 
+		/** Reports which workbench is active and whether its view is shown. */
+		function activation(
+			controller: ResidentHostedWorkspacesController,
+			viewFactory: TestHostedWorkbenchViewFactory
+		) {
+			const state = controller.getState();
+			return {
+				activeInstanceId: state.activeInstanceId,
+				visible: state.instances.map(instance => instance.visible),
+				viewShown: viewFactory.views.map(view => view.visibleCalls.at(-1)),
+			};
+		}
+
 		/**
 		 * Drains the microtask queue. A released stat settles the controller's
 		 * continuation through microtasks only, so one macrotask turn is a
@@ -7046,6 +7059,7 @@ suite('ResidentHostedWorkspacesController', () => {
 						instance => instance.instanceId
 					),
 					owners: owners.map(ownership => ownership.owner),
+					...activation(controller, viewFactory),
 				}, {
 					views: 1,
 					instances: ['instance-1'],
@@ -7054,6 +7068,9 @@ suite('ResidentHostedWorkspacesController', () => {
 						windowId: 1,
 						instanceId: 'instance-1',
 					}],
+					activeInstanceId: 'instance-1',
+					visible: [true],
+					viewShown: [true],
 				});
 			});
 
@@ -7096,11 +7113,89 @@ suite('ResidentHostedWorkspacesController', () => {
 						ownership => ownership.owner.kind === 'hosted' &&
 							ownership.owner.instanceId
 					),
+					...activation(controller, viewFactory),
 				}, {
 					views: 1,
 					closeCalls: 0,
 					instances: ['instance-1'],
 					owners: ['instance-1'],
+					activeInstanceId: 'instance-1',
+					visible: [true],
+					viewShown: [true],
+				});
+			});
+
+		test('an overlapping open released after the first attaches activates it',
+			async () => {
+				const previous = createWorktree('overlap-after-attach-previous');
+				const alpha = createWorktree('overlap-after-attach');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+				await controller.openAdmittedWorkspace(previous, 'project-previous');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(alpha, 2);
+
+				const first = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const firstStat = await heldStat.next(alpha);
+				const second = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const secondStat = await heldStat.next(alpha);
+				firstStat.release();
+				await first;
+				secondStat.release();
+				await second;
+
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					instances: controller.getState().instances.map(
+						instance => instance.instanceId
+					),
+					...activation(controller, viewFactory),
+				}, {
+					views: 2,
+					instances: ['instance-2', 'instance-1'],
+					activeInstanceId: 'instance-2',
+					visible: [true, false],
+					viewShown: [false, true],
+				});
+			});
+
+		test('simultaneous opens of a retained workbench keep it loaded and active',
+			async () => {
+				const scratch = createWorktree('overlap-retained');
+				const heldStat = new HeldStat();
+				heldStat.hold(scratch, 2);
+				const { controller, viewFactory } = createController({
+					ids: ['record', 'instance-1', 'instance-2'],
+					stat: heldStat.stat,
+				});
+				controller.retainWorkbench(URI.file(scratch));
+
+				const first = controller.openAdmittedWorkspace(scratch);
+				const firstStat = await heldStat.next(scratch);
+				const second = controller.openAdmittedWorkspace(scratch);
+				const secondStat = await heldStat.next(scratch);
+				firstStat.release();
+				secondStat.release();
+				await Promise.all([first, second]);
+
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					retained: retainedStatus(controller),
+					...activation(controller, viewFactory),
+				}, {
+					views: 1,
+					retained: [{ desiredState: 'loaded', folderStatus: undefined }],
+					activeInstanceId: 'instance-1',
+					visible: [true],
+					viewShown: [true],
 				});
 			});
 
