@@ -1205,6 +1205,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				);
 				await this.createOrRestoreInstance(
 					entry.worktreePath,
+					await this.getHostedWorkspaceFolderStat(entry.worktreePath),
 					entry.projectId,
 					entry.worktreePath === activeWorktreePath
 				);
@@ -1222,6 +1223,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				try {
 					const instance = await this.createOrRestoreInstance(
 						entry.worktreePath,
+						await this.getHostedWorkspaceFolderStat(
+							entry.worktreePath
+						),
 						entry.projectId,
 						true
 					);
@@ -1438,13 +1442,31 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
+		// Take the activation intent at request time so that overlapping opens
+		// keep request order even when their folder stats finish out of order.
+		const activationIntent = ++this.activationIntentGeneration;
+		// Stat the folder before admission, never inside it. Each stat
+		// completes in its own libuv callback, and Node drains microtasks
+		// after every callback, so the admission below runs its existing-
+		// instance check, registration, and reservation without interleaving
+		// with another open's admission, exactly as when the stat was
+		// synchronous. A live instance needs no stat: the existing-live branch
+		// below activates it without reaching createOrRestoreInstance.
+		const requested = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		const folder = requested && this.isOpenableLiveInstance(requested)
+			? undefined
+			: { stat: await this.getHostedWorkspaceFolderStat(worktreePath) };
+		if (folder &&
+			(this.shuttingDown || !canApply() || this._store.isDisposed)) {
+			return;
+		}
+
 		const retainedBeforeOpen = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
 		);
 		const retainedSnapshot = retainedBeforeOpen && {
 			...retainedBeforeOpen,
 		};
-		const activationIntent = ++this.activationIntentGeneration;
 		const pathKey = getProjectManagerPathComparisonKey(worktreePath, isLinux);
 		const pendingRecovery = this.crashRecoveries.get(pathKey);
 		if (pendingRecovery) {
@@ -1453,9 +1475,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					worktreePath,
 					projectId ?? pendingRecovery.instance.projectId
 				);
-			pendingRecovery.activationIntent = activationIntent;
-			pendingRecovery.canActivate = canActivate;
-			pendingRecovery.canApply = canApply;
+			// An open whose stat finished after a newer request must not
+			// replace that request's activation.
+			if (activationIntent === this.activationIntentGeneration) {
+				pendingRecovery.activationIntent = activationIntent;
+				pendingRecovery.canActivate = canActivate;
+				pendingRecovery.canApply = canApply;
+			}
 			await pendingRecovery.completed;
 			return;
 		}
@@ -1604,6 +1630,11 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		try {
 			created = await this.createOrRestoreInstance(
 				worktreePath,
+				// Unreachable without a stat: a live instance at request time
+				// takes the existing-live branch above. Stat defensively.
+				folder
+					? folder.stat
+					: await this.getHostedWorkspaceFolderStat(worktreePath),
 				effectiveProjectId,
 				true,
 				recoveryOperation ? undefined : activationIntent,
@@ -2234,8 +2265,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return this.sendToWorkspace(instance, 'vscode:openFiles', request);
 	}
 
+	/**
+	 * Admits a hosted workbench for a folder the caller has already statted.
+	 * Callers await the stat first so that this method, like the synchronous
+	 * stat it replaces, reaches registration and reservation without an
+	 * await that another open of the same path could interleave with.
+	 */
 	private async createOrRestoreInstance(
 		worktreePath: string,
+		workspaceFolderStat: Stats | undefined,
 		projectId: string | undefined,
 		makeActive: boolean,
 		activationIntent?: number,
@@ -2244,36 +2282,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		onSupersededRollback: () => void = () => { },
 		beforeCreate?: () => Promise<void>
 	): Promise<IHostedWorkbenchInstance | undefined> {
-		if (this.shuttingDown || !canApply()) {
+		if (this.shuttingDown || !canApply() || this._store.isDisposed) {
 			return undefined;
 		}
 
-		const workspaceFolderStat = await this.getHostedWorkspaceFolderStat(
-			worktreePath
-		);
-		// Shutdown, supersession, or disposal can happen during the stat.
-		// Everything below, including the pending-instance lookup, must see
-		// the state after the await.
-		if (this.shuttingDown || !canApply() || this._store.isDisposed) {
-			if (!canApply()) {
-				onSupersededRollback();
-			}
-			return undefined;
-		}
 		const pendingInstance =
 			this.hostedWorkspaces.getInstanceByPath(worktreePath);
-		if (pendingInstance && this.isLiveInstance(pendingInstance)) {
-			// A concurrent open attached this path during the stat. Join its
-			// live workbench, even after a late missing-folder result, rather
-			// than replacing or destroying it.
-			return this.joinConcurrentLiveInstance(
-				pendingInstance,
-				projectId,
-				makeActive,
-				activationIntent,
-				canActivate
-			);
-		}
 		if (!workspaceFolderStat) {
 			if (pendingInstance) {
 				if (pendingInstance.view || pendingInstance.attached) {
@@ -2340,22 +2354,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (instance.ownership) {
 			this.ownershipCoordinator.markRecovering(instance.ownership);
 		} else if (!await this.reserveInstanceOwnership(instance)) {
-			// A concurrent open in this window can win the reservation while
-			// this one waits; join its live workbench instead of reporting a
-			// conflict with another owner.
-			const concurrent =
-				this.hostedWorkspaces.getInstanceByPath(worktreePath);
-			if (concurrent && concurrent !== instance &&
-				this.isLiveInstance(concurrent) &&
-				!this.shuttingDown && !this._store.isDisposed && canApply()) {
-				return this.joinConcurrentLiveInstance(
-					concurrent,
-					projectId,
-					makeActive,
-					activationIntent,
-					canActivate
-				);
-			}
 			this.markRetainedWorkbenchOwnershipConflict(worktreePath);
 			this.emitState();
 			return undefined;
@@ -2443,12 +2441,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 						}
 					}
 					onSupersededRollback();
-				} else if (this.isLiveInstance(instance)) {
+				} else {
 					// Another open adopted and activated this instance while it
 					// attached. This attach still holds the only reservation, so
-					// publish it; otherwise the live workbench keeps a reservation
+					// publish it, or the live workbench keeps a reservation
 					// whose waiters never settle.
-					this.publishInstanceOwnership(instance);
+					this.publishOwnAdoptedReservation(instance);
 				}
 				return undefined;
 			}
@@ -2504,37 +2502,47 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	private isLiveInstance(instance: IHostedWorkbenchInstance): boolean {
-		return !instance.disposed && (
-			instance.state === 'loading' ||
-			instance.state === 'loaded' ||
-			instance.state === 'active'
-		);
+	/**
+	 * Mirrors the existing-live branch of openAdmittedWorkspace: such an
+	 * instance is activated in place rather than created or restored.
+	 */
+	private isOpenableLiveInstance(
+		instance: IHostedWorkbenchInstance
+	): boolean {
+		return !instance.disposed &&
+			instance.state !== 'crashed' &&
+			instance.state !== 'unloaded' &&
+			instance.state !== 'dormant' &&
+			instance.state !== 'restore-pending';
 	}
 
 	/**
-	 * Joins a live instance that a concurrent open for the same path attached
-	 * while this open was waiting, the way openAdmittedWorkspace treats an
-	 * existing live instance. The concurrent open's own activation is stale
-	 * once this open's newer intent exists, so this open must activate it.
+	 * Publishes an adopted instance's reservation only while the coordinator
+	 * still holds this instance's own record in the `reserved` phase. Any
+	 * other phase belongs to another actor: a transfer, crash recovery, or a
+	 * release or replacement.
 	 */
-	private joinConcurrentLiveInstance(
-		instance: IHostedWorkbenchInstance,
-		projectId: string | undefined,
-		makeActive: boolean,
-		activationIntent: number | undefined,
-		canActivate: () => boolean
-	): IHostedWorkbenchInstance {
-		instance.projectId = projectId ?? instance.projectId;
-		if (makeActive && canActivate() && (
-			activationIntent === undefined ||
-			activationIntent === this.activationIntentGeneration
-		)) {
-			this.activateInstance(instance, activationIntent);
-		} else {
-			this.emitState();
+	private publishOwnAdoptedReservation(
+		instance: IHostedWorkbenchInstance
+	): void {
+		const token = instance.ownership;
+		if (!token || instance.disposed) {
+			return;
 		}
-		return instance;
+		const current = this.ownershipCoordinator.lookup(instance.worktreePath);
+		const owner = current.kind === 'current-owner'
+			? current.ownership.owner
+			: undefined;
+		if (
+			current.kind === 'current-owner' &&
+			current.ownership.phase === 'reserved' &&
+			current.ownership.generation === token.generation &&
+			owner?.kind === 'hosted' &&
+			owner.windowId === this.window.id &&
+			owner.instanceId === instance.instanceId
+		) {
+			this.publishInstanceOwnership(instance);
+		}
 	}
 
 	private async attachInstance(

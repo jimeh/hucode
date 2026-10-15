@@ -50,6 +50,7 @@ import {
 	createHucodeDesktopRestoreCandidates,
 	HucodeDesktopWorkbenchOwnershipCoordinator,
 	selectHucodeDesktopRestoreWinners,
+	transferHucodeDesktopWorkbenchToRegularWindow,
 } from '../../electron-main/desktopWorkbenchOwnership.js';
 import { ensureHucodeHostedFolderInCatalog } from '../../electron-main/omniWorkspaceOpen.js';
 import {
@@ -6999,7 +7000,9 @@ suite('ResidentHostedWorkspacesController', () => {
 					objectUrls: 0,
 					owners: [],
 					ownershipChanges: 0,
-					retained: [{ desiredState: 'loaded', folderStatus: undefined }],
+					// Shutdown arrived before admission, so the open never
+					// applied and the record keeps its pre-open state.
+					retained: [{ desiredState: 'unloaded', folderStatus: undefined }],
 				});
 			});
 
@@ -7026,53 +7029,63 @@ suite('ResidentHostedWorkspacesController', () => {
 				}, { views: 0, objectUrls: 0, owners: [] });
 			});
 
-		test('concurrent opens with held stats create one view and owner',
-			async () => {
-				const alpha = createWorktree('concurrent-held-stats');
-				const heldStat = new HeldStat();
-				heldStat.hold(alpha, 2);
-				const ownershipCoordinator =
-					new HucodeDesktopWorkbenchOwnershipCoordinator();
-				const { controller, viewFactory } = createController({
-					ownershipCoordinator,
-					stat: heldStat.stat,
-				});
+		// Each production stat completes in its own libuv callback, and Node
+		// drains microtasks between callbacks. Releasing the held stats in
+		// separate macrotasks models that; releasing both in one synchronous
+		// call would interleave two admissions in a way production cannot.
+		for (const order of ['first stat first', 'second stat first'] as const) {
+			test(`concurrent opens with held stats create one view and owner (${order})`,
+				async () => {
+					const alpha = createWorktree(`concurrent-held-stats-${order}`);
+					const heldStat = new HeldStat();
+					heldStat.hold(alpha, 2);
+					const ownershipCoordinator =
+						new HucodeDesktopWorkbenchOwnershipCoordinator();
+					const { controller, viewFactory } = createController({
+						ownershipCoordinator,
+						stat: heldStat.stat,
+					});
 
-				const first = controller.openAdmittedWorkspace(
-					alpha,
-					'project-alpha'
-				);
-				const firstStat = await heldStat.next(alpha);
-				const second = controller.openAdmittedWorkspace(
-					alpha,
-					'project-alpha'
-				);
-				const secondStat = await heldStat.next(alpha);
-				firstStat.release();
-				secondStat.release();
-				await Promise.all([first, second]);
+					const first = controller.openAdmittedWorkspace(
+						alpha,
+						'project-alpha'
+					);
+					const firstStat = await heldStat.next(alpha);
+					const second = controller.openAdmittedWorkspace(
+						alpha,
+						'project-alpha'
+					);
+					const secondStat = await heldStat.next(alpha);
+					const [early, late] = order === 'first stat first'
+						? [firstStat, secondStat]
+						: [secondStat, firstStat];
+					early.release();
+					await timeout(0);
+					late.release();
+					await Promise.all([first, second]);
 
-				const owners = ownershipCoordinator.snapshot();
-				assert.deepStrictEqual({
-					views: viewFactory.views.length,
-					instances: controller.getState().instances.map(
-						instance => instance.instanceId
-					),
-					owners: owners.map(ownership => ownership.owner),
-					...activation(controller, viewFactory),
-				}, {
-					views: 1,
-					instances: ['instance-1'],
-					owners: [{
-						kind: 'hosted',
-						windowId: 1,
-						instanceId: 'instance-1',
-					}],
-					activeInstanceId: 'instance-1',
-					visible: [true],
-					viewShown: [true],
+					const owners = ownershipCoordinator.snapshot();
+					assert.deepStrictEqual({
+						views: viewFactory.views.length,
+						instances: controller.getState().instances.map(
+							instance => instance.instanceId
+						),
+						owners: owners.map(ownership => ownership.owner),
+						...activation(controller, viewFactory),
+					}, {
+						views: 1,
+						instances: ['instance-1'],
+						owners: [{
+							kind: 'hosted',
+							windowId: 1,
+							instanceId: 'instance-1',
+						}],
+						activeInstanceId: 'instance-1',
+						visible: [true],
+						viewShown: [true],
+					});
 				});
-			});
+		}
 
 		test('a late missing stat from an overlapping open keeps the live view',
 			async () => {
@@ -7288,6 +7301,94 @@ suite('ResidentHostedWorkspacesController', () => {
 				});
 		}
 
+		test('a transfer during an adopted navigation attach still transfers',
+			async () => {
+				const alpha = createWorktree('nav-join-transfer-alpha');
+				const target = createWorktree('nav-join-transfer-target');
+				const heldLoad = new DeferredPromise<void>();
+				const heldStat = new HeldStat();
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					ownershipCoordinator,
+					stat: heldStat.stat,
+					loadUrlPromises: [Promise.resolve(), heldLoad.p],
+				});
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(target);
+
+				const { navigation, navigationStat } = await startNavigationAttach(
+					controller,
+					viewFactory,
+					heldStat,
+					target
+				);
+				navigationStat.release();
+				await waitForViews(viewFactory, 2);
+				await controller.openAdmittedWorkspace(target);
+				const adopted = ownershipCoordinator.lookup(target);
+				assert.ok(adopted.kind === 'current-owner' &&
+					adopted.ownership.phase === 'reserved');
+				const targetInstanceId = adopted.ownership.owner.kind === 'hosted'
+					? adopted.ownership.owner.instanceId
+					: undefined;
+				assert.ok(targetInstanceId);
+
+				// Another window's admission waits on the reservation and, once
+				// it settles, routes to a hosted owner the way routeWorkspaceOpen
+				// does.
+				const waiting = ownershipCoordinator.reserve(
+					target,
+					{ kind: 'regular', windowId: 42 }
+				);
+				assert.strictEqual(waiting.kind, 'reserved-conflict');
+				let rerouted: Promise<void> | undefined;
+				if (waiting.kind === 'reserved-conflict') {
+					void waiting.settled.then(() => {
+						const current = ownershipCoordinator.lookup(target);
+						if (current.kind === 'current-owner' &&
+							current.ownership.owner.kind === 'hosted' &&
+							current.ownership.owner.windowId === 1) {
+							rerouted = controller.openAdmittedWorkspace(target);
+						}
+					});
+				}
+
+				const transfer = transferHucodeDesktopWorkbenchToRegularWindow({
+					coordinator: ownershipCoordinator,
+					ownership: adopted.ownership,
+					closeHostedOwner: () => controller.closeWorkspace(
+						targetInstanceId
+					),
+					openRegularWindow: async () => 7,
+					recoverHostedOwner: async () => ({ kind: 'failed' }),
+				});
+				assert.strictEqual(
+					ownershipOf(ownershipCoordinator, target)?.phase,
+					'transferring'
+				);
+				heldLoad.complete();
+				const outcome = await transfer;
+				await navigation;
+				await rerouted;
+
+				assert.deepStrictEqual({
+					outcome: outcome.kind,
+					ownership: ownershipOf(ownershipCoordinator, target),
+					hostedTarget: controller.getState().instances.some(
+						instance => instance.worktreePath === target
+					),
+				}, {
+					outcome: 'transferred',
+					ownership: {
+						phase: 'live',
+						owner: { kind: 'regular', windowId: 7 },
+					},
+					hostedTarget: false,
+				});
+			});
+
 		test('an adopted navigation attach that crashed is not published live',
 			async () => {
 				const alpha = createWorktree('nav-join-crash-alpha');
@@ -7341,6 +7442,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				const second = controller.openAdmittedWorkspace(scratch);
 				const secondStat = await heldStat.next(scratch);
 				firstStat.release();
+				await timeout(0);
 				secondStat.release();
 				await Promise.all([first, second]);
 
