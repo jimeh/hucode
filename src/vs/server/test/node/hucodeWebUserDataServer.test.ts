@@ -661,6 +661,47 @@ suite('HucodeWebUserDataServer', () => {
 		});
 	});
 
+	test('accepts a profile change whose final catalog write persists after an earlier write fails', async () => {
+		let failNextWrite = false;
+		let catalogWrites = 0;
+		await reopenServer({
+			beforeProfileCatalogWrite: async () => {
+				catalogWrites++;
+				if (failNextWrite) {
+					failNextWrite = false;
+					throw new Error('transient catalog write failure');
+				}
+			},
+		});
+		await invoke(server, 'POST', '/initialize-empty', {});
+		const channel = server.createProfilesChannel(() => DefaultURITransformer);
+		const events: DidChangeProfilesEvent[] = [];
+		const listener = channel.listen<DidChangeProfilesEvent>(null, 'onDidChangeProfiles')(event => events.push(event));
+		const writesBefore = catalogWrites;
+		// Creating a profile saves associations, then profiles. Only the first
+		// of those two writes fails; the second persists the complete catalog.
+		failNextWrite = true;
+
+		const outcome = await channel.call(null, 'createProfile', ['work', 'Work'])
+			.then(() => 'resolved', error => (error as Error).message);
+		listener.dispose();
+
+		const ids = (profiles: readonly { id: string }[] | undefined) => profiles?.map(profile => profile.id);
+		assert.deepStrictEqual({
+			outcome,
+			catalogWrites: catalogWrites - writesBefore,
+			published: events.map(event => ({ added: ids(event.added), removed: ids(event.removed) })),
+			cachedProfiles: ids(server.profilesService!.profiles),
+			diskProfiles: ids(JSON.parse(await fs.readFile(join(testHome, 'WebUser', 'profiles.json'), 'utf8')).profiles),
+		}, {
+			outcome: 'resolved',
+			catalogWrites: 2,
+			published: [{ added: ['work'], removed: [] }],
+			cachedProfiles: ['__default__profile__', 'work'],
+			diskProfiles: ['work'],
+		});
+	});
+
 	test('close waits for a pending catalog write and reports its failure', async () => {
 		await invoke(server, 'POST', '/initialize-empty', {});
 		const temporaryPath = join(testHome, 'WebUser', 'profiles.json.tmp');

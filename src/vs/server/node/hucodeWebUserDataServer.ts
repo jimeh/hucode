@@ -71,6 +71,8 @@ export interface HucodeWebUserDataServerOptions {
 	readonly beforeCommitRemoval?: () => Promise<void>;
 	/** Internal test hook for pausing or failing WebUser directory initialization. */
 	readonly beforeInitialize?: () => Promise<void>;
+	/** Internal test hook for failing individual profile catalog writes. */
+	readonly beforeProfileCatalogWrite?: () => Promise<void>;
 }
 
 export const IHucodeWebUserDataServer = createDecorator<IHucodeWebUserDataServer>('hucodeWebUserDataServer');
@@ -156,6 +158,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 				fileService,
 				uriIdentityService,
 				logService,
+				options.beforeProfileCatalogWrite,
 			));
 			this.storageHost = this._register(new HucodeWebUserDataStorageHost(
 				this.stateHome,

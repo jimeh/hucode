@@ -65,6 +65,8 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 		fileService: IFileService,
 		uriIdentityService: IUriIdentityService,
 		logService: ILogService,
+		/** Internal test hook awaited at the start of each catalog file write. */
+		private readonly beforeCatalogWrite?: () => Promise<void>,
 	) {
 		super(
 			createWebEnvironment(environmentService, join(webUserHome, 'User')),
@@ -167,19 +169,26 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 	}
 
 	/**
-	 * Waits for every catalog write queued so far and rejects if one failed.
-	 * After a failure the cache reverts to the catalog on disk, and the
-	 * reverted profiles are published as a change.
+	 * Waits for every catalog write queued so far. Each write stores the
+	 * newest catalog, so a failed write is superseded when a later one
+	 * persisted the current catalog. Otherwise the cache reverts to the
+	 * catalog on disk, the reverted profiles are published as a change, and
+	 * this rejects with the write failure.
 	 */
 	async flushCatalogWrites(): Promise<void> {
 		const writes = this.pendingCatalogWrites;
 		this.pendingCatalogWrites = [];
 		const results = await Promise.allSettled(writes);
 		const failure = results.find(result => result.status === 'rejected');
-		if (failure) {
-			this.restorePersistedCatalog();
-			throw failure.reason;
+		if (!failure) {
+			return;
 		}
+		if (this.catalog === this.persistedCatalog) {
+			this.logService.warn('A later serve-web profile catalog write superseded a failed write.', failure.reason);
+			return;
+		}
+		this.restorePersistedCatalog();
+		throw failure.reason;
 	}
 
 	protected override getStoredProfiles(): StoredUserDataProfile[] {
@@ -217,9 +226,6 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 	}
 
 	private restorePersistedCatalog(): void {
-		if (this.catalog === this.persistedCatalog) {
-			return;
-		}
 		const previous = this.profiles;
 		if (this.persistedCatalog) {
 			this.setCatalog(this.persistedCatalog);
@@ -285,6 +291,7 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 	}
 
 	private async writeCatalogFile(catalog: StoredWebProfileCatalog): Promise<void> {
+		await this.beforeCatalogWrite?.();
 		await fs.promises.mkdir(join(this.catalogPath, '..'), { recursive: true, mode: 0o700 });
 		const temporaryPath = `${this.catalogPath}.tmp`;
 		await fs.promises.writeFile(temporaryPath, JSON.stringify(catalog, undefined, 2), { mode: 0o600 });
