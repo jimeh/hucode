@@ -2,6 +2,20 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.95 - 2026-10-16
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.142.0
+
+### Bug Fixes
+
+- **projects:** stop retaining project catalog snapshots in desktop IPC (#241)
+
+### Performance Improvements
+
+- replace Hucode synchronous filesystem calls with async I/O (#239)
+
 ## 0.0.94 - 2026-10-14
 
 ### Features
