@@ -266,6 +266,17 @@
 			]
 		},
 		{
+			"path": "src/vs/platform/projectManager/test/common/projectManagerChannel.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns project-manager IPC channel coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/projectManager/test/common/projectManagerChannel.test.ts",
+					"reason": "the project manager service is Hucode-owned throughout"
+				}
+			]
+		},
+		{
 			"path": "src/vs/platform/projectManager/test/common/projectManagerState.test.ts",
 			"kind": "hucode-owned-upstream-path",
 			"reason": "Hucode owns project-manager state coverage under the platform namespace",

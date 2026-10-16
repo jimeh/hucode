@@ -851,3 +851,9 @@ human-facing guides rather than replacing them.
   workbenches consume terminal data through `PtyHostWindow`, and eager buffering
   of `onProcessData`, `onProcessReady`, or `onDidChangeProperty` can trigger
   dev-mode `Event.buffer` leak warnings with no renderer listener attached.
+- The same applies to any service exposed with `ProxyChannel.fromService`:
+  every `on*` event is buffered until its first IPC listener attaches and is
+  replayed only to that listener. An event that no IPC client subscribes to,
+  in some or all sessions, therefore retains every payload for the life of the
+  app. List such events in `unbufferedEvents` when consumers fetch their
+  initial state anyway, as `createProjectManagerChannel` does.

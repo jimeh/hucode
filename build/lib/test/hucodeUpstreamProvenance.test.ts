@@ -234,6 +234,8 @@ suite('Hucode upstream provenance', () => {
 				'src/vs/platform/extensionManagement/test/node/'
 					+ 'extensionSignatureVerificationService.test.ts',
 				'src/vs/platform/projectManager/test/common/'
+					+ 'projectManagerChannel.test.ts',
+				'src/vs/platform/projectManager/test/common/'
 					+ 'projectManagerState.test.ts',
 				'src/vs/platform/projectManager/test/electron-main/'
 					+ 'projectManagerMainService.test.ts',
