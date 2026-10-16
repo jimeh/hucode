@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { promises as fs } from 'fs';
+import { promises as fs, readFileSync } from 'fs';
 import type * as http from 'http';
 import { EventEmitter } from 'events';
 import { tmpdir } from 'os';
@@ -513,6 +513,212 @@ suite('HucodeWebUserDataServer', () => {
 		assert.strictEqual(renewed.status, 200);
 		assert.strictEqual(renewed.value.expiresAt, 21);
 		assert.strictEqual((await invoke(server, 'POST', '/commit', lease)).status, 200);
+	});
+
+	test('runs a lease operation issued during a paused commit only after the commit', async () => {
+		const commitPaused = new DeferredPromise<void>();
+		const releaseCommit = new DeferredPromise<void>();
+		const leaseWaiters: (() => void)[] = [];
+		await reopenServer({
+			acquireOperationLease: () => {
+				leaseWaiters.shift()?.();
+				return toDisposable(() => undefined);
+			},
+			beforeCommitRemoval: async () => {
+				commitPaused.complete();
+				await releaseCommit.p;
+			},
+		});
+		const lease = (await invoke(server, 'POST', '/claim', {})).value as { owner: string; generation: number };
+		assert.strictEqual((await invoke(server, 'POST', '/upload', {
+			...lease,
+			migration: { files: [], profiles: [], associations: {}, state: [] },
+		})).status, 200);
+
+		const commit = invoke(server, 'POST', '/commit', lease);
+		await commitPaused.p;
+		const renewalAdmitted = new DeferredPromise<void>();
+		leaseWaiters.push(() => renewalAdmitted.complete());
+		const renewal = invoke(server, 'POST', '/renew', lease);
+		await renewalAdmitted.p;
+		releaseCommit.complete();
+
+		// A renewal that ran during the pause would still see the staging lease
+		// and succeed; after the commit, the manifest no longer holds that lease.
+		const committed = await commit;
+		const renewed = await renewal;
+		assert.deepStrictEqual({
+			commit: { status: committed.status, committed: committed.value.committed },
+			renewal: { status: renewed.status, error: renewed.value.error },
+		}, {
+			commit: { status: 200, committed: true },
+			renewal: { status: 400, error: 'Migration lease or generation does not match.' },
+		});
+	});
+
+	test('operations wait for WebUser initialization and surface its failure', async () => {
+		await server.close();
+		server.dispose();
+		const webUserHome = join(testHome, 'WebUser');
+		await fs.rm(webUserHome, { recursive: true, force: true });
+		const initializationStarted = new DeferredPromise<void>();
+		const releaseInitialization = new DeferredPromise<void>();
+		const failure = new Error('initialization failed');
+		let initializations = 0;
+		server = createServer({
+			beforeInitialize: async () => {
+				if (++initializations === 1) {
+					initializationStarted.complete();
+					await releaseInitialization.p;
+					throw failure;
+				}
+			},
+		});
+		await initializationStarted.p;
+
+		const bootstrap = invoke(server, 'GET', '/bootstrap');
+		const storage = server.storageChannel!.call(null as never, 'getItems', { profile: undefined, workspace: undefined })
+			.then(() => undefined, error => error);
+		releaseInitialization.complete();
+
+		assert.strictEqual((await bootstrap).status, 500);
+		assert.strictEqual(await storage, failure);
+		assert.ok(logService.errors.some(args => args.includes(failure)), 'the initialization failure must be logged');
+		const retried = await invoke(server, 'GET', '/bootstrap');
+		assert.deepStrictEqual({
+			status: retried.status,
+			state: retried.value.state,
+			initializations,
+			isDirectory: (await fs.stat(webUserHome)).isDirectory(),
+		}, {
+			status: 200,
+			state: 'uninitialized',
+			initializations: 2,
+			isDirectory: true,
+		});
+	});
+
+	test('serves profile hooks from the catalog loaded before first use', async () => {
+		await invoke(server, 'POST', '/initialize-empty', {});
+		await server.createProfilesChannel(() => DefaultURITransformer).call(null, 'createProfile', ['work', 'Work']);
+		await reopenServer();
+		assert.strictEqual((await invoke(server, 'GET', '/bootstrap')).value.state, 'ready');
+
+		await fs.writeFile(join(testHome, 'WebUser', 'profiles.json'), '{not json');
+		server.profilesService!.init();
+
+		assert.deepStrictEqual(server.profilesService!.profiles.map(profile => profile.id), ['__default__profile__', 'work']);
+		await server.storageChannel!.call(null as never, 'updateItems', {
+			profile: { id: 'work' },
+			workspace: undefined,
+			insert: [['theme', 'dark']],
+		});
+	});
+
+	test('resolves a profile change only after its catalog write is durable', async () => {
+		await invoke(server, 'POST', '/initialize-empty', {});
+		const channel = server.createProfilesChannel(() => DefaultURITransformer);
+		const catalogPath = join(testHome, 'WebUser', 'profiles.json');
+		let catalogAtResolution: { profiles: { id: string }[] } | undefined;
+
+		// Read synchronously when the call resolves, before any further I/O runs.
+		await channel.call(null, 'createProfile', ['work', 'Work']).then(() => {
+			catalogAtResolution = JSON.parse(readFileSync(catalogPath, 'utf8'));
+		});
+
+		assert.deepStrictEqual(catalogAtResolution?.profiles.map(profile => profile.id), ['work']);
+	});
+
+	test('rejects and reverts a profile change whose catalog write fails', async () => {
+		await invoke(server, 'POST', '/initialize-empty', {});
+		const channel = server.createProfilesChannel(() => DefaultURITransformer);
+		const catalogPath = join(testHome, 'WebUser', 'profiles.json');
+		const temporaryPath = `${catalogPath}.tmp`;
+		const events: DidChangeProfilesEvent[] = [];
+		const listener = channel.listen<DidChangeProfilesEvent>(null, 'onDidChangeProfiles')(event => events.push(event));
+		await fs.mkdir(temporaryPath);
+
+		await assert.rejects(
+			channel.call(null, 'createProfile', ['work', 'Work']),
+			error => (error as NodeJS.ErrnoException).code === 'EISDIR',
+		);
+		listener.dispose();
+		await fs.rm(temporaryPath, { recursive: true });
+
+		const ids = (profiles: readonly { id: string }[] | undefined) => profiles?.map(profile => profile.id);
+		assert.deepStrictEqual({
+			published: events.map(event => ({ added: ids(event.added), removed: ids(event.removed) })),
+			subscriberProfiles: ids(events.at(-1)?.all),
+			cachedProfiles: ids(server.profilesService!.profiles),
+			knownProfile: server.profilesService!.isKnownProfile('work'),
+			diskProfiles: ids(JSON.parse(await fs.readFile(catalogPath, 'utf8')).profiles),
+		}, {
+			published: [{ added: ['work'], removed: [] }, { added: [], removed: ['work'] }],
+			subscriberProfiles: ['__default__profile__'],
+			cachedProfiles: ['__default__profile__'],
+			knownProfile: false,
+			diskProfiles: [],
+		});
+	});
+
+	test('accepts a profile change whose final catalog write persists after an earlier write fails', async () => {
+		let failNextWrite = false;
+		let catalogWrites = 0;
+		await reopenServer({
+			beforeProfileCatalogWrite: async () => {
+				catalogWrites++;
+				if (failNextWrite) {
+					failNextWrite = false;
+					throw new Error('transient catalog write failure');
+				}
+			},
+		});
+		await invoke(server, 'POST', '/initialize-empty', {});
+		const channel = server.createProfilesChannel(() => DefaultURITransformer);
+		const events: DidChangeProfilesEvent[] = [];
+		const listener = channel.listen<DidChangeProfilesEvent>(null, 'onDidChangeProfiles')(event => events.push(event));
+		const writesBefore = catalogWrites;
+		// Creating a profile saves associations, then profiles. Only the first
+		// of those two writes fails; the second persists the complete catalog.
+		failNextWrite = true;
+
+		const outcome = await channel.call(null, 'createProfile', ['work', 'Work'])
+			.then(() => 'resolved', error => (error as Error).message);
+		listener.dispose();
+
+		const ids = (profiles: readonly { id: string }[] | undefined) => profiles?.map(profile => profile.id);
+		assert.deepStrictEqual({
+			outcome,
+			catalogWrites: catalogWrites - writesBefore,
+			published: events.map(event => ({ added: ids(event.added), removed: ids(event.removed) })),
+			cachedProfiles: ids(server.profilesService!.profiles),
+			diskProfiles: ids(JSON.parse(await fs.readFile(join(testHome, 'WebUser', 'profiles.json'), 'utf8')).profiles),
+		}, {
+			outcome: 'resolved',
+			catalogWrites: 2,
+			published: [{ added: ['work'], removed: [] }],
+			cachedProfiles: ['__default__profile__', 'work'],
+			diskProfiles: ['work'],
+		});
+	});
+
+	test('close waits for a pending catalog write and reports its failure', async () => {
+		await invoke(server, 'POST', '/initialize-empty', {});
+		const temporaryPath = join(testHome, 'WebUser', 'profiles.json.tmp');
+		await fs.mkdir(temporaryPath);
+		// A direct service call is not flushed by a channel call, so its write
+		// is still pending when close starts.
+		await server.profilesService!.createNamedProfile('Work');
+
+		await assert.rejects(
+			server.close(),
+			error => error instanceof AggregateError &&
+				error.errors.some(cause => (cause as NodeJS.ErrnoException).code === 'EISDIR'),
+		);
+		assert.deepStrictEqual(server.profilesService!.profiles.map(profile => profile.id), ['__default__profile__']);
+		server.dispose();
+		await fs.rm(temporaryPath, { recursive: true });
+		server = createServer();
 	});
 
 	test('logs unexpected failures without exposing host paths', async () => {

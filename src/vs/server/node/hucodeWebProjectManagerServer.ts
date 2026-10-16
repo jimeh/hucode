@@ -114,9 +114,8 @@ interface WebGitConsumerRegistration {
  * Filesystem operations used by serve-web project-state persistence.
  */
 export interface HucodeProjectStateFileSystem {
-	readFile(path: string): string;
-	renameSync(source: string, target: string): void;
-	exists(path: string): boolean;
+	readFile(path: string): Promise<string>;
+	exists(path: string): Promise<boolean>;
 	mkdir(path: string): Promise<void>;
 	writeFile(path: string, data: string): Promise<void>;
 	rename(source: string, target: string): Promise<void>;
@@ -124,12 +123,15 @@ export interface HucodeProjectStateFileSystem {
 }
 
 const defaultProjectStateFileSystem: HucodeProjectStateFileSystem = {
-	// eslint-disable-next-line local/code-no-sync-fs -- TODO: ensureLoaded backs the synchronous IStateService getters; loading needs an awaited ready boundary before these can be async.
-	readFile: path => fs.readFileSync(path, 'utf8'),
-	// eslint-disable-next-line local/code-no-sync-fs -- TODO: ensureLoaded preserves corrupt state before synchronous IStateService recovery; see readFile.
-	renameSync: (source, target) => fs.renameSync(source, target),
-	// eslint-disable-next-line local/code-no-sync-fs -- TODO: ensureLoaded picks a free corrupt-state path during synchronous IStateService recovery; see readFile.
-	exists: path => fs.existsSync(path),
+	readFile: path => fs.promises.readFile(path, 'utf8'),
+	exists: async path => {
+		try {
+			await fs.promises.access(path);
+			return true;
+		} catch {
+			return false;
+		}
+	},
 	mkdir: async path => {
 		await fs.promises.mkdir(path, { recursive: true });
 	},
@@ -146,6 +148,10 @@ const defaultProjectStateFileSystem: HucodeProjectStateFileSystem = {
 
 /**
  * File-backed state service for the serve-web project registry.
+ *
+ * Callers must await {@link load} before using the synchronous
+ * `IStateService` methods, which serve and update the loaded state without
+ * filesystem reads.
  */
 export class HucodeProjectFileStateService implements IStateService {
 	declare readonly _serviceBrand: undefined;
@@ -154,6 +160,7 @@ export class HucodeProjectFileStateService implements IStateService {
 	private readonly tempStoragePath: string;
 	private state: StoredProjectManagerState | undefined;
 	private loaded = false;
+	private loading: Promise<void> | undefined;
 	private readonly writeQueue = new Queue<void>();
 	private stateVersion = 0;
 	private persistedVersion = 0;
@@ -183,7 +190,7 @@ export class HucodeProjectFileStateService implements IStateService {
 			return defaultValue;
 		}
 
-		this.ensureLoaded();
+		this.assertLoaded();
 		return (this.state as T | undefined) ?? defaultValue;
 	}
 
@@ -195,7 +202,7 @@ export class HucodeProjectFileStateService implements IStateService {
 			return;
 		}
 
-		this.ensureLoaded();
+		this.assertLoaded();
 		this.state = data as StoredProjectManagerState | undefined;
 		this.writeState();
 	}
@@ -216,7 +223,7 @@ export class HucodeProjectFileStateService implements IStateService {
 			return;
 		}
 
-		this.ensureLoaded();
+		this.assertLoaded();
 		this.state = undefined;
 		this.writeState();
 	}
@@ -302,14 +309,32 @@ export class HucodeProjectFileStateService implements IStateService {
 		}
 	}
 
-	private ensureLoaded(): void {
+	/**
+	 * Loads persisted state once. Concurrent callers share one attempt. A
+	 * missing file is empty state; any other read failure rejects with
+	 * {@link ProjectStateUnavailableError} and leaves the service unloaded so
+	 * the next call retries.
+	 */
+	load(): Promise<void> {
 		if (this.loaded) {
-			return;
+			return Promise.resolve();
 		}
+		this.loading ??= this.doLoad().finally(() => {
+			this.loading = undefined;
+		});
+		return this.loading;
+	}
 
+	private assertLoaded(): void {
+		if (!this.loaded) {
+			throw new ProjectStateUnavailableError();
+		}
+	}
+
+	private async doLoad(): Promise<void> {
 		let serializedState: string;
 		try {
-			serializedState = this.fileSystem.readFile(this.storagePath);
+			serializedState = await this.fileSystem.readFile(this.storagePath);
 		} catch (error) {
 			if (isFileSystemError(error, 'ENOENT')) {
 				this.state = undefined;
@@ -324,30 +349,34 @@ export class HucodeProjectFileStateService implements IStateService {
 			throw new ProjectStateUnavailableError();
 		}
 
+		let state: unknown;
 		try {
-			const state: unknown = JSON.parse(serializedState);
+			state = JSON.parse(serializedState);
 			if (!isStoredProjectManagerState(state)) {
 				throw new InvalidProjectStateError();
 			}
-			if (!hasValidStoredWorkbenchState(state)) {
-				this.preserveCorruptStateFile(new InvalidProjectStateError());
-				this.state = {
-					version: PROJECT_MANAGER_STORAGE_VERSION,
-					projects: state.projects,
-				};
-				this.loaded = true;
-				this.writeState();
-				return;
-			}
-			this.state = state;
 		} catch (error) {
 			if (!(error instanceof SyntaxError) &&
 				!(error instanceof InvalidProjectStateError)) {
 				throw error;
 			}
-			this.preserveCorruptStateFile(error);
+			await this.preserveCorruptStateFile(error);
 			this.state = undefined;
+			this.loaded = true;
+			return;
 		}
+
+		if (!hasValidStoredWorkbenchState(state)) {
+			await this.preserveCorruptStateFile(new InvalidProjectStateError());
+			this.state = {
+				version: PROJECT_MANAGER_STORAGE_VERSION,
+				projects: state.projects,
+			};
+			this.loaded = true;
+			this.writeState();
+			return;
+		}
+		this.state = state;
 		this.loaded = true;
 	}
 
@@ -355,11 +384,11 @@ export class HucodeProjectFileStateService implements IStateService {
 	 * A syntactically or structurally corrupt state file cannot be loaded on a
 	 * later retry, so preserve its exact bytes before starting from empty state.
 	 */
-	private preserveCorruptStateFile(error: unknown): void {
+	private async preserveCorruptStateFile(error: unknown): Promise<void> {
 		const basePreservePath = `${this.storagePath}.corrupt`;
 		let preservePath = basePreservePath;
 		let suffix = 0;
-		while (this.fileSystem.exists(preservePath)) {
+		while (await this.fileSystem.exists(preservePath)) {
 			preservePath = `${basePreservePath}.${++suffix}`;
 		}
 		this.logService.error(
@@ -368,7 +397,7 @@ export class HucodeProjectFileStateService implements IStateService {
 			error,
 		);
 		try {
-			this.fileSystem.renameSync(this.storagePath, preservePath);
+			await this.fileSystem.rename(this.storagePath, preservePath);
 			this.logService.info(
 				`[Hucode Projects] Preserved unreadable state as ${preservePath}`,
 			);
@@ -920,15 +949,19 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
-		return !this.disposed && this.service
-			? this.service.getProjects()
-			: [];
+		if (this.disposed || !this.service) {
+			return [];
+		}
+		await this.stateService?.load();
+		return this.service.getProjects();
 	}
 
 	async getCatalog(): Promise<ProjectCatalogSnapshot | undefined> {
-		return !this.disposed && this.service
-			? this.service.getCatalog()
-			: undefined;
+		if (this.disposed || !this.service) {
+			return undefined;
+		}
+		await this.stateService?.load();
+		return this.service.getCatalog();
 	}
 
 	/**
@@ -1329,7 +1362,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 					this.stateService?.currentWriteGeneration ?? 0;
 				// Once the mutation starts, it is intentionally detached from
 				// the request token. Git create/remove and the state flush must
-				// finish even when the browser disconnects.
+				// finish even when the browser disconnects. Loading after the
+				// generation capture makes the flush below include any write
+				// that recovers corrupt state during the load.
+				await this.stateService?.load();
 				result = await mutation();
 				await this.stateService?.flushWritesAfter(writeGeneration);
 			} finally {
@@ -1347,6 +1383,9 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		this.throwIfCanceled(token);
 		const queued = this.gitReadLimiter.queue(async () => {
 			this.throwIfCanceled(token);
+			// Project state is loaded inside the admitted operation so server
+			// disposal joins the load and a load failure maps to HTTP 503.
+			await this.stateService?.load();
 			return read();
 		}, token);
 		return raceCancellationError(queued, token);

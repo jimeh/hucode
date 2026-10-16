@@ -137,171 +137,258 @@ export class FileServiceGitMetadataWatcher implements IGitMetadataWatcher {
 }
 
 /**
+ * Filesystem operations used by {@link NodeGitMetadataWatcher}. Tests inject
+ * this to control watcher events and pending existence probes.
+ */
+export interface NodeGitMetadataWatcherFileSystem {
+	/**
+	 * Starts a non-persistent watch. Throws synchronously when the path cannot
+	 * be watched; `ENOENT` and `ENOTDIR` mean that the path does not exist.
+	 */
+	watch(
+		path: string,
+		listener: (event: string, filename: string | null) => void
+	): IDisposable;
+	/** Resolves whether a path currently exists. */
+	exists(path: string): Promise<boolean>;
+}
+
+const nodeGitMetadataWatcherFileSystem: NodeGitMetadataWatcherFileSystem = {
+	watch: (path, listener) => {
+		const watcher = fs.watch(path, { persistent: false }, listener);
+		return toDisposable(() => watcher.close());
+	},
+	exists: async path => {
+		try {
+			await fs.promises.access(path);
+			return true;
+		} catch {
+			return false;
+		}
+	},
+};
+
+/** Generation shared by every re-arm of one watch, so stale work is ignored. */
+interface NodeGitMetadataWatchArm {
+	generation: number;
+}
+
+/**
  * Node adapter that recovers a narrow watch when a missing metadata path
  * appears. This matches the desktop file-service watcher's missing-path
  * behavior without recursively watching a repository.
+ *
+ * Attempting `fs.watch` is the existence test for a watched path: it throws
+ * synchronously when the path is missing. Asynchronous existence probes only
+ * run while an ancestor watcher is already installed, so an appearance during
+ * a pending probe still produces an event and another probe.
  */
 export class NodeGitMetadataWatcher implements IGitMetadataWatcher {
-	constructor(private readonly logService: ILogService) { }
+	constructor(
+		private readonly logService: ILogService,
+		private readonly fileSystem: NodeGitMetadataWatcherFileSystem =
+			nodeGitMetadataWatcherFileSystem,
+	) { }
 
 	watch(path: string, onDidChange: () => void): IDisposable {
 		const store = new DisposableStore();
 		const currentWatcher = store.add(new MutableDisposable<IDisposable>());
-		this.watchPath(store, currentWatcher, path, onDidChange);
+		this.watchPath(store, currentWatcher, { generation: 0 }, path, onDidChange);
 		return store;
 	}
 
 	watchEntry(path: string, onDidChange: () => void): IDisposable {
 		const store = new DisposableStore();
-		this.watchEntryPath(store, path, onDidChange);
+		const currentWatcher = store.add(new MutableDisposable<IDisposable>());
+		this.watchEntryPath(
+			store,
+			currentWatcher,
+			{ generation: 0 },
+			path,
+			onDidChange
+		);
 		return store;
 	}
 
 	private watchPath(
 		store: DisposableStore,
 		currentWatcher: MutableDisposable<IDisposable>,
+		arm: NodeGitMetadataWatchArm,
 		path: string,
 		onDidChange: () => void
 	): void {
 		if (store.isDisposed) {
 			return;
 		}
+		const generation = ++arm.generation;
+		const isCurrent = () =>
+			!store.isDisposed && arm.generation === generation;
+		const rearm = () => {
+			currentWatcher.clear();
+			this.watchPath(store, currentWatcher, arm, path, onDidChange);
+		};
 
-		// eslint-disable-next-line local/code-no-sync-fs -- TODO: watcher setup re-arms synchronously from fs.watch callbacks; an async probe needs a disposal guard so a disposed store cannot install a late watcher.
-		if (fs.existsSync(path)) {
-			try {
-				const watcher = fs.watch(
-					path,
-					{ persistent: false },
-					event => {
-						if (event === 'rename') {
-							currentWatcher.clear();
-							this.watchPath(
-								store,
-								currentWatcher,
-								path,
-								onDidChange
-							);
-						}
-						onDidChange();
-					}
-				);
-				currentWatcher.value = toDisposable(() => watcher.close());
+		const watcher = this.tryWatch(path, event => {
+			if (!isCurrent()) {
 				return;
-			} catch (error) {
-				this.logService.warn(
-					`[GitWorktreeMonitor] Failed to watch ${path}: ${error}`
-				);
 			}
-		}
-
-		const ancestor = nearestExistingAncestor(path);
-		if (!ancestor) {
+			if (event === 'rename') {
+				rearm();
+			}
+			onDidChange();
+		});
+		if (typeof watcher === 'object') {
+			currentWatcher.value = watcher;
 			return;
 		}
 
-		try {
-			const watcher = fs.watch(
-				ancestor.dir,
-				{ persistent: false },
-				(_event, filename) => {
-					if (filename !== null && filename !== ancestor.nextSegment) {
-						return;
-					}
-					// eslint-disable-next-line local/code-no-sync-fs -- TODO: the ancestor watcher re-arms synchronously; see watchPath.
-					if (!fs.existsSync(join(ancestor.dir, ancestor.nextSegment))) {
-						return;
-					}
-
-					currentWatcher.clear();
-					this.watchPath(
-						store,
-						currentWatcher,
-						path,
-						onDidChange
-					);
-					onDidChange();
-				}
-			);
-			currentWatcher.value = toDisposable(() => watcher.close());
-		} catch (error) {
-			this.logService.warn(
-				`[GitWorktreeMonitor] Failed to watch ${ancestor.dir}: ${error}`
-			);
-		}
+		this.watchNearestAncestor(
+			path,
+			watcher === 'missing',
+			currentWatcher,
+			isCurrent,
+			(_event, filename, nextSegment) =>
+				filename === null || filename === nextSegment,
+			() => {
+				rearm();
+				onDidChange();
+			}
+		);
 	}
 
 	private watchEntryPath(
 		store: DisposableStore,
+		currentWatcher: MutableDisposable<IDisposable>,
+		arm: NodeGitMetadataWatchArm,
 		path: string,
 		onDidChange: () => void
 	): void {
 		if (store.isDisposed) {
 			return;
 		}
+		const generation = ++arm.generation;
+		const isCurrent = () =>
+			!store.isDisposed && arm.generation === generation;
 
 		const parent = dirname(path);
-		// eslint-disable-next-line local/code-no-sync-fs -- TODO: entry watcher setup re-arms synchronously from fs.watch callbacks; an async probe needs a disposal guard so a disposed store cannot install a late watcher.
-		if (fs.existsSync(parent)) {
-			try {
-				const entryName = basename(path);
-				const watcher = fs.watch(
-					parent,
-					{ persistent: false },
-					(event, filename) => {
-						if (event !== 'rename' ||
-							(filename !== null && !samePathSegment(
-								filename.toString(),
-								entryName
-							))) {
-							return;
-						}
-						onDidChange();
-					}
-				);
-				store.add(toDisposable(() => watcher.close()));
+		const entryName = basename(path);
+		const watcher = this.tryWatch(parent, (event, filename) => {
+			if (!isCurrent() ||
+				event !== 'rename' ||
+				(filename !== null && !samePathSegment(filename, entryName))) {
 				return;
-			} catch (error) {
-				this.logService.warn(
-					`[GitWorktreeMonitor] Failed to watch ${parent}: ${error}`
-				);
 			}
-		}
-
-		const ancestor = nearestExistingAncestor(path);
-		if (!ancestor) {
+			onDidChange();
+		});
+		if (typeof watcher === 'object') {
+			currentWatcher.value = watcher;
 			return;
 		}
 
-		const pending = new MutableDisposable();
-		store.add(pending);
-		try {
-			const watcher = fs.watch(
-				ancestor.dir,
-				{ persistent: false },
-				(event, filename) => {
-					if (event !== 'rename' ||
-						(filename !== null && !samePathSegment(
-							filename.toString(),
-							ancestor.nextSegment
-						))) {
-						return;
-					}
-					// eslint-disable-next-line local/code-no-sync-fs -- TODO: the ancestor watcher re-arms synchronously; see watchEntryPath.
-					if (!fs.existsSync(join(ancestor.dir, ancestor.nextSegment))) {
-						return;
-					}
+		const parentMissing = watcher === 'missing';
+		this.watchNearestAncestor(
+			parentMissing ? parent : path,
+			parentMissing,
+			currentWatcher,
+			isCurrent,
+			(event, filename, nextSegment) =>
+				event === 'rename' &&
+				(filename === null || samePathSegment(filename, nextSegment)),
+			() => {
+				currentWatcher.clear();
+				this.watchEntryPath(store, currentWatcher, arm, path, onDidChange);
+				onDidChange();
+			}
+		);
+	}
 
-					pending.clear();
-					this.watchEntryPath(store, path, onDidChange);
-					onDidChange();
+	/**
+	 * Installs a watcher on the nearest watchable ancestor of `path` and calls
+	 * `onSegmentAppeared` once the segment below that ancestor exists.
+	 *
+	 * `pathMissing` reports whether `path` itself failed to watch because it
+	 * does not exist. A segment observed missing is verified again after the
+	 * ancestor watcher is installed, because it may have appeared between the
+	 * failed watch attempt and the install, when no watcher could report it.
+	 */
+	private watchNearestAncestor(
+		path: string,
+		pathMissing: boolean,
+		currentWatcher: MutableDisposable<IDisposable>,
+		isCurrent: () => boolean,
+		accepts: (
+			event: string,
+			filename: string | null,
+			nextSegment: string
+		) => boolean,
+		onSegmentAppeared: () => void
+	): void {
+		let child = path;
+		let childMissing = pathMissing;
+		let dir = dirname(child);
+		while (dir !== child) {
+			const segmentPath = child;
+			const nextSegment = basename(segmentPath);
+			const probe = () => this.probeSegment(
+				segmentPath,
+				isCurrent,
+				onSegmentAppeared
+			);
+			const watcher = this.tryWatch(dir, (event, filename) => {
+				if (isCurrent() && accepts(event, filename, nextSegment)) {
+					probe();
 				}
-			);
-			pending.value = toDisposable(() => watcher.close());
+			});
+			if (typeof watcher === 'object') {
+				currentWatcher.value = watcher;
+				if (childMissing) {
+					probe();
+				}
+				return;
+			}
+			if (watcher === 'failed') {
+				return;
+			}
+			child = dir;
+			childMissing = true;
+			dir = dirname(child);
+		}
+	}
+
+	private probeSegment(
+		path: string,
+		isCurrent: () => boolean,
+		onSegmentAppeared: () => void
+	): void {
+		void this.fileSystem.exists(path)
+			.then(exists => {
+				if (exists && isCurrent()) {
+					onSegmentAppeared();
+				}
+			})
+			.catch(error => this.logService.warn(
+				`[GitWorktreeMonitor] Failed to check ${path}: ${error}`
+			));
+	}
+
+	/**
+	 * Returns the installed watcher, `'missing'` when the path does not exist,
+	 * or `'failed'` after logging any other watch failure.
+	 */
+	private tryWatch(
+		path: string,
+		listener: (event: string, filename: string | null) => void
+	): IDisposable | 'missing' | 'failed' {
+		try {
+			return this.fileSystem.watch(path, listener);
 		} catch (error) {
+			if (isMissingPathError(error)) {
+				return 'missing';
+			}
 			this.logService.warn(
-				`[GitWorktreeMonitor] Failed to watch ${ancestor.dir}: ${error}`
+				`[GitWorktreeMonitor] Failed to watch ${path}: ${error}`
 			);
+			return 'failed';
 		}
 	}
 }
@@ -938,20 +1025,9 @@ function isNotRepositoryError(error: unknown): boolean {
 	);
 }
 
-function nearestExistingAncestor(
-	path: string
-): { readonly dir: string; readonly nextSegment: string } | undefined {
-	let current = path;
-	let parent = dirname(current);
-	while (parent !== current) {
-		// eslint-disable-next-line local/code-no-sync-fs -- TODO: the synchronous watcher setup above walks to the nearest existing ancestor; convert together with watchPath and watchEntryPath.
-		if (fs.existsSync(parent)) {
-			return { dir: parent, nextSegment: basename(current) };
-		}
-		current = parent;
-		parent = dirname(current);
-	}
-	return undefined;
+function isMissingPathError(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException | undefined)?.code;
+	return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
 function samePathSegment(first: string, second: string): boolean {

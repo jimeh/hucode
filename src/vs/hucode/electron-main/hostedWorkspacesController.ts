@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import electron from 'electron';
-import { Stats, statSync } from 'fs';
+import { promises as fsPromises, Stats } from 'fs';
 import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js';
 import { raceTimeout } from '../../base/common/async.js';
 import { VSBuffer } from '../../base/common/buffer.js';
@@ -56,6 +56,8 @@ import { createHucodeHostedNavigationSnapshot } from
 	'../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { getSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspaces/node/workspaces.js';
+import { ISingleFolderWorkspaceIdentifier } from
+	'../../platform/workspace/common/workspace.js';
 import { getProjectManagerPathComparisonKey } from
 	'../../platform/projectManager/common/projectManagerState.js';
 import { ProjectCatalogSnapshot } from
@@ -77,6 +79,8 @@ import {
 import {
 	createHostedWorkbenchRestorePlan,
 	HucodeHostedWorkbenchRestorePolicy,
+	HucodeRetainedWorkbenchDesiredState,
+	IHucodeRetainedWorkbench,
 	RetainedWorkbenchCatalog,
 } from '../common/retainedWorkbench.js';
 import { ProjectSwitcherOmniSection } from
@@ -88,7 +92,11 @@ import {
 	getHucodeProjectRestoreCandidateId,
 	getHucodeRetainedRestoreCandidateId,
 	HucodeDesktopWorkbenchOwnershipCoordinator,
+	HucodeDesktopWorkbenchPathLookup,
 	IHucodeDesktopWorkbenchOwnershipToken,
+	IHucodeDesktopWorkbenchPath,
+	resolveHucodeDesktopWorkbenchPath,
+	resolveHucodeDesktopWorkbenchPaths,
 } from './desktopWorkbenchOwnership.js';
 
 export interface IHostedWorkbenchView extends Electron.View {
@@ -129,14 +137,25 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly overlayCaptureSettleTimeoutMs?: number;
 	readonly createInstanceId?: () => string;
 	readonly now?: () => number;
-	readonly shouldRestoreCandidate?: (
-		candidate: IHucodeHostedRestoreCandidate
-	) => boolean;
+	/**
+	 * Decides once per restore which candidates this window may restore,
+	 * returning one decision per candidate in order.
+	 */
+	readonly selectRestoreCandidates?: (
+		candidates: readonly IHucodeHostedRestoreCandidate[]
+	) => Promise<readonly boolean[]>;
 	readonly beforeRestore?: () => Promise<void>;
 	readonly viewFactory?: IHostedWorkbenchViewFactory;
 	readonly ipc?: IHostedWorkspaceIpcMain;
 	/** Brings an inactive application forward for a forced hosted focus. */
 	readonly activateApplication?: () => void;
+	/** Reads hosted folder metadata; defaults to `fs.promises.stat`. */
+	readonly stat?: (path: string) => Promise<Stats>;
+	/**
+	 * Resolves the ownership key of a hosted path; defaults to
+	 * `resolveHucodeDesktopWorkbenchPath`.
+	 */
+	readonly resolvePath?: (path: string) => Promise<IHucodeDesktopWorkbenchPath>;
 }
 
 /** Full-view capture served as the shell placeholder while occluded. */
@@ -171,6 +190,11 @@ interface IHostedWorkbenchInstance {
 	instanceId: string;
 	projectId?: string;
 	worktreePath: string;
+	/**
+	 * Resolved ownership key for {@link worktreePath}, fixed at creation so
+	 * ownership calls never wait on path resolution.
+	 */
+	readonly ownershipPath: IHucodeDesktopWorkbenchPath;
 	view?: IHostedWorkbenchView;
 	configObjectUrl?: IIPCObjectUrl<INativeWindowConfiguration>;
 	trustedProcessIds: Set<number>;
@@ -183,7 +207,19 @@ interface IHostedWorkbenchInstance {
 	appearance?: IHucodeHostedAppearanceSnapshot;
 	lifecycleGeneration: number;
 	connectionGeneration: number;
+	/**
+	 * Advances on every main-frame, cross-document navigation, so a pending
+	 * configuration refresh can tell that its renderer moved to a newer
+	 * document. Unlike `connectionGeneration`, it does not advance when the
+	 * same document only acquires or releases its hosted-shell connection.
+	 */
+	documentGeneration: number;
 	appliedBounds?: IRectangle;
+	/**
+	 * Workspace identifier from the stat behind the latest hosted
+	 * configuration, recorded at attach and configuration refresh.
+	 */
+	workspace?: ISingleFolderWorkspaceIdentifier;
 	interruptedUnloadReloadGeneration?: number;
 	ownership?: IHucodeDesktopWorkbenchOwnershipToken;
 	disposed: boolean;
@@ -314,12 +350,22 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private readonly now: () => number;
 	private readonly crashRecoveries =
 		new Map<string, ICrashRecoveryOperation>();
-	private readonly shouldRestoreCandidate:
-		(candidate: IHucodeHostedRestoreCandidate) => boolean;
+	private readonly selectRestoreCandidates: (
+		candidates: readonly IHucodeHostedRestoreCandidate[]
+	) => Promise<readonly boolean[]>;
+	private readonly resolvePath: (
+		path: string
+	) => Promise<IHucodeDesktopWorkbenchPath>;
 	private readonly beforeRestore: () => Promise<void>;
 	private readonly viewFactory: IHostedWorkbenchViewFactory;
 	private readonly ipc: IHostedWorkspaceIpcMain;
 	private readonly activateApplication: () => void;
+	private readonly stat: (path: string) => Promise<Stats>;
+	/**
+	 * Per-path counter advanced by every synchronous `folderStatus` write, so
+	 * an asynchronous crash probe can detect that its result went stale.
+	 */
+	private readonly folderStatusEpochs = new Map<string, number>();
 
 	constructor(
 		private readonly protocolMainService: IProtocolMainService,
@@ -371,8 +417,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			ResidentHostedWorkspacesController.OVERLAY_CAPTURE_SETTLE_TIMEOUT_MS;
 		this.createInstanceId = options.createInstanceId ?? generateUuid;
 		this.now = options.now ?? Date.now;
-		this.shouldRestoreCandidate = options.shouldRestoreCandidate ??
-			(() => true);
+		this.selectRestoreCandidates = options.selectRestoreCandidates ??
+			(async candidates => candidates.map(() => true));
+		this.resolvePath = options.resolvePath ??
+			resolveHucodeDesktopWorkbenchPath;
 		this.beforeRestore = options.beforeRestore ?? (async () => { });
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
 			path => getProjectManagerPathComparisonKey(path, isLinux),
@@ -394,7 +442,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.getPendingWorkbenchPathKey(pending.worktreePath),
 				pending.worktreePath
 			);
-			this.retainedWorkbenches.retain(
+			this.retainWorkbenchRecord(
 				URI.file(pending.worktreePath),
 				pending.desiredState,
 				pending.lastActiveAt
@@ -406,6 +454,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.ipc = options.ipc ?? validatedIpcMain;
 		this.activateApplication = options.activateApplication ??
 			defaultActivateApplication;
+		this.stat = options.stat ?? (path => fsPromises.stat(path));
 
 		const shellWebContents = this.window.win?.webContents;
 		if (shellWebContents) {
@@ -624,20 +673,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return this.instancesById.get(this.activeInstanceId);
 	}
 
-	/** Returns the profile associated with the active hosted workspace. */
+	/**
+	 * Returns the profile associated with the active hosted workspace.
+	 *
+	 * This query stays synchronous and does no file I/O: it resolves the
+	 * profile from the workspace identifier recorded when the active
+	 * workbench was last configured. As a result it returns the running
+	 * workbench's profile even after its folder is deleted, and `undefined`
+	 * for an active instance that has not attached yet, such as one still
+	 * `restore-pending`.
+	 */
 	getActiveWorkspaceProfile(): IUserDataProfile | undefined {
-		const instance = this.getActiveInstance();
-		if (!instance) {
-			return undefined;
-		}
-		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
-			instance.worktreePath
-		);
-		const workspace = workspaceFolderStat &&
-			getSingleFolderWorkspaceIdentifier(
-				URI.file(instance.worktreePath),
-				workspaceFolderStat
-			);
+		const workspace = this.getActiveInstance()?.workspace;
 		return workspace
 			? this.userDataProfilesMainService.getProfileForWorkspace(workspace) ??
 			this.userDataProfilesMainService.defaultProfile
@@ -1011,7 +1058,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		while (!this.shuttingDown) {
 			const outcome = this.ownershipCoordinator.reserve(
-				instance.worktreePath,
+				instance.ownershipPath,
 				this.getOwnershipOwner(instance.instanceId)
 			);
 			if (outcome.kind === 'reserved') {
@@ -1039,7 +1086,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		phase: 'live' | 'recovering' = 'live'
 	): boolean {
 		const outcome = this.ownershipCoordinator.seed({
-			path: instance.worktreePath,
+			path: instance.ownershipPath,
 			owner: this.getOwnershipOwner(instance.instanceId),
 			phase,
 		});
@@ -1103,29 +1150,69 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		const restoreEntries = this.window.config?.omniResidentWorkspaces ?? [];
-		const legacyCandidateIds =
+		const adoptedLegacyPaths =
 			this.adoptLegacyRetainedWorkbenches(restoreEntries);
 		const configuredActiveWorktreePath =
 			this.window.config?.omniActiveWorktreePath;
-		const retainedCandidates = this.retainedWorkbenches.all
+		const retainedRecords = this.retainedWorkbenches.all
 			.filter(record => record.desiredState === 'loaded')
-			.flatMap(record => {
-				const worktreePath = URI.revive(record.folderUri).fsPath;
-				if (!this.shouldRestoreCandidate({
-					path: worktreePath,
-					stableInstanceId: legacyCandidateIds.get(
-						getProjectManagerPathComparisonKey(
-							worktreePath,
-							isLinux
-						)
-					) ?? getHucodeRetainedRestoreCandidateId(record.id),
-					persistedActive: configuredActiveWorktreePath !== undefined &&
-						pathsEqualForRestore(
-							configuredActiveWorktreePath,
-							worktreePath
-						),
-					lastActiveAt: record.lastActiveAt,
-				})) {
+			.map(record => ({
+				record,
+				worktreePath: URI.revive(record.folderUri).fsPath,
+			}));
+		const projectEntries = restoreEntries.filter(entry => !!entry.projectId);
+		// Resolve every path the restore can touch before the synchronous
+		// candidate, dormant, and pending batches below.
+		const resolvePath = await resolveHucodeDesktopWorkbenchPaths([
+			...adoptedLegacyPaths,
+			...retainedRecords.map(({ worktreePath }) => worktreePath),
+			...projectEntries.map(entry => entry.worktreePath),
+		], path => this.resolvePath(path));
+		if (this.isRestoreAbandoned()) {
+			return;
+		}
+		const legacyCandidateIds = new Map(adoptedLegacyPaths.map(path => [
+			getProjectManagerPathComparisonKey(path, isLinux),
+			getHucodeLegacyRetainedRestoreCandidateId(resolvePath(path)),
+		]));
+		const isPersistedActive = (worktreePath: string) =>
+			configuredActiveWorktreePath !== undefined &&
+			pathsEqualForRestore(configuredActiveWorktreePath, worktreePath);
+		const restoreCandidates: IHucodeHostedRestoreCandidate[] = [
+			...retainedRecords.map(({ record, worktreePath }) => ({
+				path: worktreePath,
+				stableInstanceId: legacyCandidateIds.get(
+					getProjectManagerPathComparisonKey(worktreePath, isLinux)
+				) ?? getHucodeRetainedRestoreCandidateId(record.id),
+				persistedActive: isPersistedActive(worktreePath),
+				lastActiveAt: record.lastActiveAt,
+			})),
+			...projectEntries.map(entry => ({
+				path: entry.worktreePath,
+				stableInstanceId: getHucodeProjectRestoreCandidateId(
+					entry.projectId!,
+					entry.worktreePath
+				),
+				persistedActive: isPersistedActive(entry.worktreePath),
+				lastActiveAt: entry.lastActiveAt,
+			})),
+		];
+		const selected = await this.selectRestoreCandidates(restoreCandidates);
+		if (this.isRestoreAbandoned()) {
+			return;
+		}
+		// A catalog synchronization during the awaits above can remap a
+		// record to its global id or drop it. Act on each candidate's current
+		// record, and skip one that vanished or is no longer desired loaded.
+		const retainedCandidates = retainedRecords.flatMap(
+			({ record: snapshot, worktreePath }, index) => {
+				const record = this.retainedWorkbenches.getByUri(
+					URI.revive(snapshot.folderUri)
+				);
+				if (record?.desiredState !== 'loaded') {
+					return [];
+				}
+				if (!selected[index]) {
 					this.retainedWorkbenches.update(record.id, {
 						desiredState: 'unloaded',
 					});
@@ -1136,22 +1223,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					retainedWorkbenchId: record.id,
 					lastActiveAt: record.lastActiveAt,
 				}];
-			});
-		const projectCandidates = restoreEntries
-			.filter(entry => !!entry.projectId)
-			.filter(entry => this.shouldRestoreCandidate({
-				path: entry.worktreePath,
-				stableInstanceId: getHucodeProjectRestoreCandidateId(
-					entry.projectId!,
-					entry.worktreePath
-				),
-				persistedActive: configuredActiveWorktreePath !== undefined &&
-					pathsEqualForRestore(
-						configuredActiveWorktreePath,
-						entry.worktreePath
-					),
-				lastActiveAt: entry.lastActiveAt,
-			}))
+			}
+		);
+		const projectCandidates = projectEntries
+			.filter((_entry, index) => selected[retainedRecords.length + index])
 			.map(entry => ({
 				worktreePath: entry.worktreePath,
 				projectId: entry.projectId,
@@ -1177,8 +1252,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			`restore:start entries=${candidates.length} ` +
 			`active=${activeWorktreePath ?? '<none>'}`
 		);
-		this.createDormantInstances(plan.dormant);
-		this.createRestorePendingInstances(plan.eager, activeWorktreePath);
+		this.createDormantInstances(plan.dormant, resolvePath);
+		this.createRestorePendingInstances(
+			plan.eager,
+			activeWorktreePath,
+			resolvePath
+		);
 
 		for (const [index, entry] of plan.eager.entries()) {
 			try {
@@ -1189,6 +1268,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				);
 				await this.createOrRestoreInstance(
 					entry.worktreePath,
+					await this.getHostedWorkspaceFolderStat(entry.worktreePath),
+					resolvePath(entry.worktreePath),
 					entry.projectId,
 					entry.worktreePath === activeWorktreePath
 				);
@@ -1206,6 +1287,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				try {
 					const instance = await this.createOrRestoreInstance(
 						entry.worktreePath,
+						await this.getHostedWorkspaceFolderStat(
+							entry.worktreePath
+						),
+						resolvePath(entry.worktreePath),
 						entry.projectId,
 						true
 					);
@@ -1227,33 +1312,42 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.emitState();
 	}
 
+	/**
+	 * Abandons a restore after one of its awaits when the controller was
+	 * disposed or began shutting down. Continuing would create reservations
+	 * that nothing settles, and other windows waiting on them would hang.
+	 */
+	private isRestoreAbandoned(): boolean {
+		if (!this._store.isDisposed && !this.shuttingDown) {
+			return false;
+		}
+		this.restored = true;
+		return true;
+	}
+
+	/**
+	 * Retains project-less legacy restore entries. Returns the paths that had
+	 * no retained record, which keep a legacy restore-candidate ID.
+	 */
 	private adoptLegacyRetainedWorkbenches(
 		entries: readonly IOmniWorkspaceRestoreEntry[]
-	): ReadonlyMap<string, string> {
-		const candidateIds = new Map<string, string>();
+	): string[] {
+		const adoptedPaths: string[] = [];
 		for (const entry of entries) {
 			if (!entry.projectId) {
 				const folderUri = URI.file(entry.worktreePath);
 				const existing = this.retainedWorkbenches.getByUri(folderUri);
-				this.retainedWorkbenches.retain(
+				this.retainWorkbenchRecord(
 					folderUri,
 					'loaded',
 					entry.lastActiveAt
 				);
 				if (!existing) {
-					candidateIds.set(
-						getProjectManagerPathComparisonKey(
-							entry.worktreePath,
-							isLinux
-						),
-						getHucodeLegacyRetainedRestoreCandidateId(
-							entry.worktreePath
-						)
-					);
+					adoptedPaths.push(entry.worktreePath);
 				}
 			}
 		}
-		return candidateIds;
+		return adoptedPaths;
 	}
 
 	private createDormantInstances(
@@ -1261,7 +1355,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			readonly projectId?: string;
 			readonly worktreePath: string;
 			readonly lastActiveAt?: number;
-		}[]
+		}[],
+		resolvePath: HucodeDesktopWorkbenchPathLookup
 	): void {
 		for (const entry of entries) {
 			if (this.hostedWorkspaces.getInstanceByPath(entry.worktreePath)) {
@@ -1272,6 +1367,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				instanceId: this.createInstanceId(),
 				projectId: entry.projectId,
 				worktreePath: entry.worktreePath,
+				ownershipPath: resolvePath(entry.worktreePath),
 				trustedProcessIds: new Set<number>(),
 				attached: false,
 				state: 'dormant',
@@ -1280,6 +1376,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				lastActiveAt: entry.lastActiveAt,
 				lifecycleGeneration: 0,
 				connectionGeneration: 0,
+				documentGeneration: 0,
 				disposed: false,
 			};
 			if (!this.seedInstanceOwnership(instance)) {
@@ -1312,7 +1409,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			readonly worktreePath: string;
 			readonly lastActiveAt?: number;
 		}[],
-		activeWorktreePath: string | undefined
+		activeWorktreePath: string | undefined,
+		resolvePath: HucodeDesktopWorkbenchPathLookup
 	): void {
 		for (const entry of entries) {
 			if (this.hostedWorkspaces.getInstanceByPath(entry.worktreePath)) {
@@ -1323,6 +1421,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				instanceId: this.createInstanceId(),
 				projectId: entry.projectId,
 				worktreePath: entry.worktreePath,
+				ownershipPath: resolvePath(entry.worktreePath),
 				trustedProcessIds: new Set<number>(),
 				attached: false,
 				state: 'restore-pending',
@@ -1333,10 +1432,11 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					: entry.lastActiveAt,
 				lifecycleGeneration: 0,
 				connectionGeneration: 0,
+				documentGeneration: 0,
 				disposed: false,
 			};
 			const reservation = this.ownershipCoordinator.reserve(
-				entry.worktreePath,
+				instance.ownershipPath,
 				this.getOwnershipOwner(instance.instanceId)
 			);
 			if (reservation.kind !== 'reserved') {
@@ -1352,6 +1452,46 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		this.emitState();
+	}
+
+	/**
+	 * Advances the folder-status epoch for a path. Every synchronous
+	 * `folderStatus` write goes through this so that a pending crash probe
+	 * started before the write cannot overwrite it.
+	 */
+	private advanceFolderStatusEpoch(worktreePath: string): number {
+		const key = getProjectManagerPathComparisonKey(worktreePath, isLinux);
+		const epoch = (this.folderStatusEpochs.get(key) ?? 0) + 1;
+		this.folderStatusEpochs.set(key, epoch);
+		return epoch;
+	}
+
+	/** Retains a folder record; retaining also clears its folder status. */
+	private retainWorkbenchRecord(
+		folderUri: URI,
+		desiredState: HucodeRetainedWorkbenchDesiredState,
+		lastActiveAt?: number
+	): IHucodeRetainedWorkbench {
+		this.advanceFolderStatusEpoch(folderUri.fsPath);
+		return this.retainedWorkbenches.retain(
+			folderUri,
+			desiredState,
+			lastActiveAt
+		);
+	}
+
+	/** Updates a retained record, including a synchronous folder status. */
+	private updateRetainedWorkbenchFolderStatus(
+		record: IHucodeRetainedWorkbench,
+		update: Partial<Pick<
+			IHucodeRetainedWorkbench,
+			'desiredState' | 'lastActiveAt'
+		>> & {
+			readonly folderStatus: IHucodeRetainedWorkbench['folderStatus'];
+		}
+	): IHucodeRetainedWorkbench | undefined {
+		this.advanceFolderStatusEpoch(URI.revive(record.folderUri).fsPath);
+		return this.retainedWorkbenches.update(record.id, update);
 	}
 
 	private markRetainedWorkbenchOwnershipConflict(
@@ -1382,13 +1522,45 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
+		// Take the activation intent at request time so that overlapping opens
+		// keep request order even when their folder stats finish out of order.
+		const activationIntent = ++this.activationIntentGeneration;
+		// Stat the folder and resolve its ownership key before admission, never
+		// inside it. Each completes in its own libuv callback, and Node drains
+		// microtasks after every callback, so the admission below runs its
+		// existing-instance check, registration, and reservation without
+		// interleaving with another open's admission, exactly as when the stat
+		// was synchronous. A live instance needs neither: the existing-live
+		// branch below activates it without reaching createOrRestoreInstance.
+		const requested = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		const folder = requested && this.isOpenableLiveInstance(requested)
+			? undefined
+			: await this.prepareAdmission(worktreePath);
+		if (folder &&
+			(this.shuttingDown || !canApply() || this._store.isDisposed)) {
+			return;
+		}
+		// An open through a symlink alias of a folder that a live instance in
+		// this window already serves continues under that instance's own path,
+		// as routeWorkspaceOpen does once the owner is visible. The base
+		// existing-live branch below then activates it in request order. The
+		// owner is always registered by now: an admission's chain from its
+		// prepared stat to registration is microtask-only unless an onboarding
+		// beforeCreate runs, and that window exists for same-path opens too.
+		const aliasedInstance = folder &&
+			!this.hostedWorkspaces.getInstanceByPath(worktreePath)
+			? this.getOpenableLiveOwnerInstance(folder.ownershipPath)
+			: undefined;
+		if (aliasedInstance) {
+			worktreePath = aliasedInstance.worktreePath;
+		}
+
 		const retainedBeforeOpen = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
 		);
 		const retainedSnapshot = retainedBeforeOpen && {
 			...retainedBeforeOpen,
 		};
-		const activationIntent = ++this.activationIntentGeneration;
 		const pathKey = getProjectManagerPathComparisonKey(worktreePath, isLinux);
 		const pendingRecovery = this.crashRecoveries.get(pathKey);
 		if (pendingRecovery) {
@@ -1397,9 +1569,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					worktreePath,
 					projectId ?? pendingRecovery.instance.projectId
 				);
-			pendingRecovery.activationIntent = activationIntent;
-			pendingRecovery.canActivate = canActivate;
-			pendingRecovery.canApply = canApply;
+			// An open whose stat finished after a newer request must not
+			// replace that request's activation.
+			if (activationIntent === this.activationIntentGeneration) {
+				pendingRecovery.activationIntent = activationIntent;
+				pendingRecovery.canActivate = canActivate;
+				pendingRecovery.canApply = canApply;
+			}
 			await pendingRecovery.completed;
 			return;
 		}
@@ -1425,7 +1601,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				if (effectiveProjectId && retained) {
 					this.retainedWorkbenches.dismiss(retained.id);
 				} else if (!effectiveProjectId) {
-					this.retainedWorkbenches.retain(
+					this.retainWorkbenchRecord(
 						URI.file(worktreePath),
 						'loaded'
 					);
@@ -1456,6 +1632,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 						instanceId,
 						projectId: effectiveProjectId,
 						worktreePath,
+						ownershipPath: existing.ownershipPath,
 						trustedProcessIds: new Set<number>(),
 						attached: false,
 						state: 'restore-pending',
@@ -1464,6 +1641,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 						lastActiveAt: this.now(),
 						lifecycleGeneration: 0,
 						connectionGeneration: 0,
+						documentGeneration: 0,
 						ownership: reassigned.reservation,
 						disposed: false,
 					};
@@ -1522,7 +1700,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (effectiveProjectId && retained) {
 			this.retainedWorkbenches.dismiss(retained.id);
 		} else if (!effectiveProjectId) {
-			this.retainedWorkbenches.retain(
+			this.retainWorkbenchRecord(
 				URI.file(worktreePath),
 				'loaded'
 			);
@@ -1543,11 +1721,16 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
+		// Unreachable without a prepared admission: a live instance at request
+		// time takes the existing-live branch above. Prepare defensively.
+		const admission = folder ?? await this.prepareAdmission(worktreePath);
 		let supersededOpenRolledBack = false;
 		let created: IHostedWorkbenchInstance | undefined;
 		try {
 			created = await this.createOrRestoreInstance(
 				worktreePath,
+				admission.stat,
+				admission.ownershipPath,
 				effectiveProjectId,
 				true,
 				recoveryOperation ? undefined : activationIntent,
@@ -1568,7 +1751,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			}
 		}
 		if (!created) {
-			const ownership = this.ownershipCoordinator.lookup(worktreePath);
+			const ownership = this.ownershipCoordinator.lookup(
+				admission.ownershipPath
+			);
 			if (ownership.kind === 'current-owner' && (
 				ownership.ownership.owner.kind !== 'hosted' ||
 				ownership.ownership.owner.windowId !== this.window.id
@@ -1578,8 +1763,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 		if (supersededOpenRolledBack) {
 			if (retainedSnapshot) {
-				const restored = this.retainedWorkbenches.update(
-					retainedSnapshot.id,
+				const restored = this.updateRetainedWorkbenchFolderStatus(
+					retainedSnapshot,
 					{
 						desiredState: retainedSnapshot.desiredState,
 						folderStatus: retainedSnapshot.folderStatus,
@@ -1614,7 +1799,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	/** Retains and opens a workbench for controller-level admission tests. */
 	async retainAndOpenAdmittedWorkbench(folderUri: URI): Promise<void> {
-		this.retainedWorkbenches.retain(folderUri, 'unloaded');
+		this.retainWorkbenchRecord(folderUri, 'unloaded');
 		await this.openAdmittedWorkspace(folderUri.fsPath);
 	}
 
@@ -1635,7 +1820,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	/** Records an arbitrary workbench before main-process admission. */
 	retainWorkbench(folderUri: URI): void {
-		this.retainedWorkbenches.retain(folderUri, 'unloaded');
+		this.retainWorkbenchRecord(folderUri, 'unloaded');
 		this.emitState();
 	}
 
@@ -1709,7 +1894,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				liveProjectIds.has(instance.projectId)) {
 				continue;
 			}
-			this.retainedWorkbenches.retain(
+			this.retainWorkbenchRecord(
 				URI.file(instance.worktreePath),
 				'loaded',
 				instance.lastActiveAt
@@ -1829,10 +2014,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				return;
 			}
 
+			// The release and seed below form one synchronous handoff; reuse the
+			// released key so no await can let another owner in between.
 			const dormantInstance: IHostedWorkbenchInstance = {
 				instanceId: this.createInstanceId(),
 				projectId: instance.projectId,
 				worktreePath: instance.worktreePath,
+				ownershipPath: instance.ownershipPath,
 				trustedProcessIds: new Set<number>(),
 				attached: false,
 				state: 'dormant',
@@ -1841,6 +2029,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				lastActiveAt: instance.lastActiveAt,
 				lifecycleGeneration: 0,
 				connectionGeneration: 0,
+				documentGeneration: 0,
 				disposed: false,
 			};
 			this.releaseInstanceOwnership(instance);
@@ -2026,7 +2215,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				continue;
 			}
 
-			this.retainedWorkbenches.retain(
+			this.retainWorkbenchRecord(
 				URI.file(instance.worktreePath),
 				'loaded',
 				instance.lastActiveAt
@@ -2178,8 +2367,17 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return this.sendToWorkspace(instance, 'vscode:openFiles', request);
 	}
 
+	/**
+	 * Admits a hosted workbench for a folder the caller has already statted
+	 * and resolved. Callers await both first so that this method, like the
+	 * synchronous stat it replaces, reaches registration and reservation
+	 * without an await that another open of the same path could interleave
+	 * with.
+	 */
 	private async createOrRestoreInstance(
 		worktreePath: string,
+		workspaceFolderStat: Stats | undefined,
+		ownershipPath: IHucodeDesktopWorkbenchPath,
 		projectId: string | undefined,
 		makeActive: boolean,
 		activationIntent?: number,
@@ -2188,15 +2386,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		onSupersededRollback: () => void = () => { },
 		beforeCreate?: () => Promise<void>
 	): Promise<IHostedWorkbenchInstance | undefined> {
-		if (this.shuttingDown || !canApply()) {
+		if (this.shuttingDown || !canApply() || this._store.isDisposed) {
 			return undefined;
 		}
 
 		const pendingInstance =
 			this.hostedWorkspaces.getInstanceByPath(worktreePath);
-		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
-			worktreePath
-		);
 		if (!workspaceFolderStat) {
 			if (pendingInstance) {
 				if (pendingInstance.view || pendingInstance.attached) {
@@ -2210,7 +2405,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				URI.file(worktreePath)
 			);
 			if (retained) {
-				this.retainedWorkbenches.update(retained.id, {
+				this.updateRetainedWorkbenchFolderStatus(retained, {
 					...(activationIntent === undefined
 						? { desiredState: 'unloaded' as const }
 						: {}),
@@ -2224,7 +2419,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			URI.file(worktreePath)
 		);
 		if (retained?.folderStatus === 'missing') {
-			this.retainedWorkbenches.update(retained.id, {
+			this.updateRetainedWorkbenchFolderStatus(retained, {
 				folderStatus: undefined,
 			});
 		}
@@ -2249,6 +2444,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					instanceId: this.createInstanceId(),
 					projectId,
 					worktreePath,
+					ownershipPath,
 					trustedProcessIds: new Set<number>(),
 					attached: false,
 					state: 'loading',
@@ -2257,6 +2453,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					lastActiveAt: makeActive ? this.now() : undefined,
 					lifecycleGeneration: 0,
 					connectionGeneration: 0,
+					documentGeneration: 0,
 					disposed: false,
 				};
 
@@ -2270,7 +2467,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		try {
 			await beforeCreate?.();
-			const currentOwnership = this.ownershipCoordinator.lookup(worktreePath);
+			const currentOwnership = this.ownershipCoordinator.lookup(
+				instance.ownershipPath
+			);
 			if (this.shuttingDown || !canApply() || !instance.ownership || currentOwnership.kind !== 'current-owner' || currentOwnership.ownership.generation !== instance.ownership.generation || currentOwnership.ownership.owner.kind !== 'hosted' || currentOwnership.ownership.owner.instanceId !== instance.instanceId) {
 				this.releaseInstanceOwnership(instance);
 				if (!canApply()) {
@@ -2323,6 +2522,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 							instanceId: pendingSnapshot.instanceId,
 							projectId: pendingSnapshot.projectId,
 							worktreePath,
+							// Reuse the released key: this rollback must not
+							// wait on path resolution.
+							ownershipPath: instance.ownershipPath,
 							trustedProcessIds: new Set<number>(),
 							attached: false,
 							state: pendingSnapshot.state,
@@ -2333,6 +2535,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 								pendingSnapshot.lifecycleGeneration,
 							connectionGeneration:
 								pendingSnapshot.connectionGeneration,
+							documentGeneration: 0,
 							disposed: false,
 						};
 						const restoredOwnership = pendingSnapshot.state ===
@@ -2350,6 +2553,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 						}
 					}
 					onSupersededRollback();
+				} else {
+					// Another open adopted and activated this instance while it
+					// attached. This attach still holds the only reservation, so
+					// publish it, or the live workbench keeps a reservation
+					// whose waiters never settle.
+					this.publishOwnAdoptedReservation(instance);
 				}
 				return undefined;
 			}
@@ -2388,7 +2597,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			}
 
 			await this.deferStateEmission(async () => {
-				this.markRetainedWorkbenchCrashed(instance.worktreePath);
+				const crashRecorded = this.markRetainedWorkbenchCrashed(
+					instance.worktreePath
+				);
 				await this.destroyInstance(instance, true, false);
 				if (instance.instanceId === this.activeInstanceId) {
 					this.activeInstanceId =
@@ -2396,9 +2607,82 @@ export class ResidentHostedWorkspacesController extends Disposable {
 							? previousActiveInstanceId
 							: undefined;
 				}
+				await crashRecorded;
 				this.emitState();
 			});
 			throw error;
+		}
+	}
+
+	/** Returns this window's live hosted instance owning a resolved path. */
+	private getOpenableLiveOwnerInstance(
+		ownershipPath: IHucodeDesktopWorkbenchPath
+	): IHostedWorkbenchInstance | undefined {
+		const current = this.ownershipCoordinator.lookup(ownershipPath);
+		const owner = current.kind === 'current-owner'
+			? current.ownership.owner
+			: undefined;
+		const instance = owner?.kind === 'hosted' &&
+			owner.windowId === this.window.id
+			? this.instancesById.get(owner.instanceId)
+			: undefined;
+		return instance && this.isOpenableLiveInstance(instance)
+			? instance
+			: undefined;
+	}
+
+	/** Stats a folder and resolves its ownership key concurrently. */
+	private async prepareAdmission(worktreePath: string): Promise<{
+		readonly stat: Stats | undefined;
+		readonly ownershipPath: IHucodeDesktopWorkbenchPath;
+	}> {
+		const [stat, ownershipPath] = await Promise.all([
+			this.getHostedWorkspaceFolderStat(worktreePath),
+			this.resolvePath(worktreePath),
+		]);
+		return { stat, ownershipPath };
+	}
+
+	/**
+	 * Mirrors the existing-live branch of openAdmittedWorkspace: such an
+	 * instance is activated in place rather than created or restored.
+	 */
+	private isOpenableLiveInstance(
+		instance: IHostedWorkbenchInstance
+	): boolean {
+		return !instance.disposed &&
+			instance.state !== 'crashed' &&
+			instance.state !== 'unloaded' &&
+			instance.state !== 'dormant' &&
+			instance.state !== 'restore-pending';
+	}
+
+	/**
+	 * Publishes an adopted instance's reservation only while the coordinator
+	 * still holds this instance's own record in the `reserved` phase. Any
+	 * other phase belongs to another actor: a transfer, crash recovery, or a
+	 * release or replacement.
+	 */
+	private publishOwnAdoptedReservation(
+		instance: IHostedWorkbenchInstance
+	): void {
+		const token = instance.ownership;
+		if (!token || instance.disposed) {
+			return;
+		}
+		const current = this.ownershipCoordinator.lookup(instance.ownershipPath);
+		const owner = current.kind === 'current-owner'
+			? current.ownership.owner
+			: undefined;
+		if (
+			current.kind === 'current-owner' &&
+			current.ownership.phase === 'reserved' &&
+			current.ownership.generation === token.generation &&
+			owner?.kind === 'hosted' &&
+			owner.windowId === this.window.id &&
+			owner.instanceId === instance.instanceId
+		) {
+			this.publishInstanceOwnership(instance);
 		}
 	}
 
@@ -2468,6 +2752,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			isMainFrame,
 		}) => {
 			if (isMainFrame && !isSameDocument) {
+				instance.documentGeneration++;
 				this.invalidateHostedShellBinding(instance);
 			}
 			this.trustView(instance);
@@ -2483,7 +2768,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				.destroyBrowserViewsForHostedWebContents(webContentsId);
 			this.setViewVisible(instance, false);
 			this.markInstanceOwnershipRecovering(instance);
-			this.markRetainedWorkbenchCrashed(instance.worktreePath);
+			void this.markRetainedWorkbenchCrashed(instance.worktreePath);
 			this.updateInstanceState(instance, {
 				state: 'crashed',
 				focused: false,
@@ -2499,7 +2784,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				instance.view = undefined;
 				instance.attached = false;
 				this.markInstanceOwnershipRecovering(instance);
-				this.markRetainedWorkbenchCrashed(instance.worktreePath);
+				void this.markRetainedWorkbenchCrashed(instance.worktreePath);
 				this.updateInstanceState(instance, {
 					state: 'crashed',
 					focused: false,
@@ -2529,24 +2814,67 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		);
 	}
 
-	private markRetainedWorkbenchCrashed(worktreePath: string): void {
+	/**
+	 * Records a crash on the path's retained record. The desired state changes
+	 * synchronously. The folder status follows from an asynchronous stat and
+	 * is applied only while the same record is still unloaded and no other
+	 * folder-status write happened in the meantime, so a stale probe cannot
+	 * mark a recreated and reopened folder missing. The returned promise never
+	 * rejects.
+	 */
+	private markRetainedWorkbenchCrashed(worktreePath: string): Promise<void> {
 		const retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
 		);
-		if (retained) {
-			this.retainedWorkbenches.update(retained.id, {
-				desiredState: 'unloaded',
-				folderStatus: this.getRetainedWorkbenchFolderStatus(worktreePath),
-			});
+		if (!retained) {
+			return Promise.resolve();
+		}
+		this.retainedWorkbenches.update(retained.id, {
+			desiredState: 'unloaded',
+		});
+		const epoch = this.advanceFolderStatusEpoch(worktreePath);
+		return this.applyCrashedFolderStatus(worktreePath, retained.id, epoch);
+	}
+
+	private async applyCrashedFolderStatus(
+		worktreePath: string,
+		retainedId: string,
+		epoch: number
+	): Promise<void> {
+		try {
+			const folderStatus =
+				await this.getRetainedWorkbenchFolderStatus(worktreePath);
+			const retained = this.retainedWorkbenches.getByUri(
+				URI.file(worktreePath)
+			);
+			if (
+				this._store.isDisposed ||
+				this.folderStatusEpochs.get(
+					getProjectManagerPathComparisonKey(worktreePath, isLinux)
+				) !== epoch ||
+				retained?.id !== retainedId ||
+				retained.desiredState !== 'unloaded' ||
+				retained.folderStatus === folderStatus
+			) {
+				return;
+			}
+			this.retainedWorkbenches.update(retainedId, { folderStatus });
+			this.emitState();
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to record hosted workspace ' +
+				`folder status for ${worktreePath}: ${error}`
+			);
 		}
 	}
 
-	private getRetainedWorkbenchFolderStatus(
+	private async getRetainedWorkbenchFolderStatus(
 		worktreePath: string
-	): 'missing' | undefined {
+	): Promise<'missing' | undefined> {
 		try {
-			// eslint-disable-next-line local/code-no-sync-fs -- TODO: make crash bookkeeping async; markRetainedWorkbenchCrashed records folder status synchronously from crash and failed-attach paths.
-			return statSync(worktreePath).isDirectory() ? undefined : 'missing';
+			return (await this.stat(worktreePath)).isDirectory()
+				? undefined
+				: 'missing';
 		} catch (error) {
 			return isHostedWorkspaceFolderUnavailableError(error)
 				? 'missing'
@@ -2554,12 +2882,11 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	private getHostedWorkspaceFolderStat(
+	private async getHostedWorkspaceFolderStat(
 		worktreePath: string
-	): Stats | undefined {
+	): Promise<Stats | undefined> {
 		try {
-			// eslint-disable-next-line local/code-no-sync-fs -- TODO: the synchronous getActiveWorkspaceProfile query and refreshHostedConfiguration reload path need async variants before this stat can move.
-			const stat = statSync(worktreePath);
+			const stat = await this.stat(worktreePath);
 			return stat.isDirectory() ? stat : undefined;
 		} catch (error) {
 			if (isHostedWorkspaceFolderUnavailableError(error)) {
@@ -2569,6 +2896,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
+	/**
+	 * Builds the hosted configuration and records its workspace identifier on
+	 * the instance for {@link getActiveWorkspaceProfile}.
+	 */
 	private createHostedConfiguration(
 		instance: IHostedWorkbenchInstance,
 		hostedWebContentsId: number,
@@ -2589,6 +2920,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				`${instance.worktreePath}.`
 			);
 		}
+		instance.workspace = workspace;
 
 		return {
 			...baseConfig,
@@ -2645,7 +2977,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			URI.file(instance.worktreePath)
 		);
 		if (retained) {
-			this.retainedWorkbenches.update(retained.id, {
+			this.updateRetainedWorkbenchFolderStatus(retained, {
 				desiredState: 'loaded',
 				folderStatus: undefined,
 				lastActiveAt: instance.lastActiveAt,
@@ -2794,7 +3126,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					)
 			);
 			if (unloadResult === 'reload-required') {
-				this.reloadInstanceAfterInterruptedUnload(instance);
+				await this.reloadInstanceAfterInterruptedUnload(instance);
 				return false;
 			}
 			if (unloadResult === 'superseded') {
@@ -2879,30 +3211,48 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	private reloadInstanceAfterInterruptedUnload(
+	private async reloadInstanceAfterInterruptedUnload(
 		instance: IHostedWorkbenchInstance
-	): void {
+	): Promise<void> {
+		const ownsPath = () => !instance.disposed &&
+			this.hostedWorkspaces.getInstanceByPath(instance.worktreePath) ===
+			instance;
 		if (
-			instance.disposed ||
+			!ownsPath() ||
 			instance.interruptedUnloadReloadGeneration ===
-			instance.lifecycleGeneration ||
-			this.hostedWorkspaces.getInstanceByPath(instance.worktreePath) !==
-			instance
+			instance.lifecycleGeneration
 		) {
 			return;
 		}
 
-		if (!this.refreshHostedConfiguration(instance)) {
+		// Claim the reload before the configuration stat so that a concurrent
+		// caller for the same generation returns instead of reloading twice.
+		const previousClaim = instance.interruptedUnloadReloadGeneration;
+		const claim = instance.lifecycleGeneration;
+		instance.interruptedUnloadReloadGeneration = claim;
+		const ownsClaim = () =>
+			instance.interruptedUnloadReloadGeneration === claim;
+		let webContents: Electron.WebContents | undefined;
+		try {
+			// A reactivation during the stat does not cancel this reload: the
+			// renderer still holds an unconfirmed unload preparation.
+			webContents = await this.refreshHostedConfiguration(
+				instance,
+				() => ownsPath() && ownsClaim()
+			);
+		} finally {
+			if (!webContents && ownsClaim()) {
+				instance.interruptedUnloadReloadGeneration = previousClaim;
+			}
+		}
+		if (!webContents) {
 			return;
 		}
-		const webContents = this.getLiveWebContents(instance)!;
 
 		this.logService.trace(
 			'[HucodeShellMainService] Reloading hosted workspace after an ' +
 			`interrupted unload for ${instance.worktreePath}.`
 		);
-		instance.interruptedUnloadReloadGeneration =
-			instance.lifecycleGeneration;
 		instance.state = 'loading';
 		webContents.reload();
 		this.emitState();
@@ -3495,39 +3845,70 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		);
 	}
 
-	reloadWorkspace(): void {
+	async reloadWorkspace(): Promise<void> {
 		const instance = this.getActiveInstance();
-		if (instance && this.refreshHostedConfiguration(instance)) {
-			instance.view!.webContents.reload();
-		}
+		const webContents = instance &&
+			await this.refreshHostedConfiguration(instance);
+		webContents?.reload();
 	}
 
-	reloadHostedShellSelf(binding: IHucodeHostedShellBinding): boolean {
+	async reloadHostedShellSelf(
+		binding: IHucodeHostedShellBinding
+	): Promise<boolean> {
 		const instance = this.getBoundHostedShellInstance(binding);
-		if (!instance || !this.refreshHostedConfiguration(instance)) {
+		const webContents = instance && await this.refreshHostedConfiguration(
+			instance,
+			() => this.getBoundHostedShellInstance(binding) === instance
+		);
+		if (!webContents) {
 			return false;
 		}
-		instance.view!.webContents.reload();
+		webContents.reload();
 		return true;
 	}
 
-	private refreshHostedConfiguration(
-		instance: IHostedWorkbenchInstance
-	): boolean {
+	/**
+	 * Rewrites the hosted configuration from a fresh folder stat before a
+	 * reload. Returns the web contents to reload, or `undefined` when the
+	 * folder is unavailable or the instance changed while the stat was
+	 * pending: it was disposed or replaced, its renderer or configuration
+	 * object changed, it navigated to a newer document, it crashed, or
+	 * `canApply` no longer holds. A reactivation does not abandon the refresh;
+	 * the same document is still the one to reload.
+	 */
+	private async refreshHostedConfiguration(
+		instance: IHostedWorkbenchInstance,
+		canApply: () => boolean = () => true
+	): Promise<Electron.WebContents | undefined> {
 		const webContents = this.getLiveWebContents(instance);
 		const configObjectUrl = instance.configObjectUrl;
-		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
+		if (!webContents || !configObjectUrl) {
+			return undefined;
+		}
+		const documentGeneration = instance.documentGeneration;
+		const crashedBeforeStat = instance.state === 'crashed';
+		const workspaceFolderStat = await this.getHostedWorkspaceFolderStat(
 			instance.worktreePath
 		);
-		if (!webContents || !configObjectUrl || !workspaceFolderStat) {
-			return false;
+		if (
+			!workspaceFolderStat ||
+			this._store.isDisposed ||
+			instance.disposed ||
+			this.instancesById.get(instance.instanceId) !== instance ||
+			this.getLiveWebContents(instance) !== webContents ||
+			instance.configObjectUrl !== configObjectUrl ||
+			instance.documentGeneration !== documentGeneration ||
+			(!crashedBeforeStat && instance.state === 'crashed') ||
+			!canApply()
+		) {
+			return undefined;
 		}
 		configObjectUrl.update(this.createHostedConfiguration(
 			instance,
 			webContents.id,
 			workspaceFolderStat
 		));
-		return true;
+		return webContents;
 	}
 
 	toggleWorkspaceDevTools(): boolean {

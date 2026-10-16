@@ -6,12 +6,11 @@
 import assert from 'assert';
 import * as cp from 'child_process';
 import { EventEmitter } from 'events';
-import * as nodeFs from 'fs';
 import * as fs from 'fs/promises';
 import type { ClientRequest } from 'http';
 import * as os from 'os';
 import { promisify } from 'util';
-import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
+import { DeferredPromise, raceTimeout, timeout } from '../../../base/common/async.js';
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { CancellationError } from '../../../base/common/errors.js';
 import { toDisposable } from '../../../base/common/lifecycle.js';
@@ -1093,6 +1092,42 @@ suite('HucodeWebProjectManagerServer', function () {
 				}
 			);
 			assert.deepStrictEqual(removed.body.result, { removed: true });
+		}
+	);
+
+	test('cancels a scheduled refresh quiet delay when the server is disposed',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const added = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					refreshDelay(
+						milliseconds: number,
+						token?: CancellationToken
+					): Promise<void>;
+					runScheduledProjectRefresh(projectId: string): Promise<void>;
+				};
+			}).service;
+			const quietDelayStarted =
+				new DeferredPromise<CancellationToken | undefined>();
+			service.refreshDelay = (_milliseconds, token) => {
+				void quietDelayStarted.complete(token);
+				return token ? timeout(60_000, token) : timeout(60_000);
+			};
+
+			const refresh = service.runScheduledProjectRefresh(
+				added.body.project.id
+			);
+			const token = await quietDelayStarted.p;
+			server.dispose();
+
+			assert.strictEqual(token?.isCancellationRequested, true);
+			await assert.rejects(refresh, CancellationError);
 		}
 	);
 
@@ -4092,6 +4127,47 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('flushes a first mutation\'s state recovery write before responding',
+		async () => {
+			const storagePath = join(serverDataPath, 'hucode', 'projects.json');
+			await fs.mkdir(join(serverDataPath, 'hucode'), { recursive: true });
+			// No projects, so Git hydration cannot queue a write of its own.
+			await fs.writeFile(storagePath, JSON.stringify({
+				version: 1,
+				projects: [],
+				workbenches: [{ id: '', folderPath: '/bad', order: 0 }],
+			}));
+			const fileSystem = new TestProjectStateFileSystem();
+			fileSystem.writeError = new Error('recovery write failed');
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+
+			// Deleting an unknown project writes nothing itself, so only the
+			// recovery write made while loading state can fail this response.
+			const response = await handle<ErrorResponseBody>(
+				server,
+				'DELETE',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/unknown-project`
+			);
+			fileSystem.writeError = undefined;
+
+			assert.deepStrictEqual({
+				response,
+				preserved: await pathExists(`${storagePath}.corrupt`),
+			}, {
+				response: {
+					statusCode: 500,
+					body: { error: 'recovery write failed' },
+				},
+				preserved: true,
+			});
+		}
+	);
+
 	test('does not overwrite an existing corrupt-state backup', async () => {
 		const storagePath = join(serverDataPath, 'hucode', 'projects.json');
 		const oldCorruptState = '{ old corrupt state';
@@ -4207,6 +4283,187 @@ suite('HucodeWebProjectManagerServer', function () {
 			);
 		});
 	}
+
+	test('rejects synchronous project state access before load', async () => {
+		const stateService = new HucodeProjectFileStateService(
+			serverDataPath,
+			new NullLogService(),
+			new TestProjectStateFileSystem()
+		);
+
+		assert.throws(
+			() => stateService.getItem(PROJECT_MANAGER_STORAGE_KEY),
+			/Project state is temporarily unavailable/
+		);
+		await stateService.load();
+		assert.strictEqual(
+			stateService.getItem(PROJECT_MANAGER_STORAGE_KEY),
+			undefined
+		);
+	});
+
+	test('reads project state only after its pending load resolves', async () => {
+		await fs.mkdir(join(serverDataPath, 'hucode'), { recursive: true });
+		await fs.writeFile(
+			join(serverDataPath, 'hucode', 'projects.json'),
+			serializeStoredProjects([{
+				id: 'existing',
+				label: 'example',
+				rootPath: projectPath,
+			}])
+		);
+		const releaseRead = new DeferredPromise<void>();
+		const fileSystem = new TestProjectStateFileSystem({
+			readFile: async () => {
+				// Release from a later turn so a state read that does not wait for
+				// the pending load observes the service as unloaded.
+				void Promise.resolve().then(() => releaseRead.complete());
+				await releaseRead.p;
+			},
+		});
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			fileSystem
+		);
+
+		const loaded = await handle<ProjectsResponseBody>(
+			server,
+			'GET',
+			HUCODE_WEB_PROJECTS_API_PATH
+		);
+
+		assert.deepStrictEqual({
+			statusCode: loaded.statusCode,
+			projectIds: loaded.body.projects?.map(project =>
+				(project as { readonly id: string }).id
+			),
+		}, {
+			statusCode: 200,
+			projectIds: ['existing'],
+		});
+	});
+
+	test('shares one project state load across concurrent first requests',
+		async () => {
+			const releaseRead = new DeferredPromise<void>();
+			const fileSystem = new TestProjectStateFileSystem({
+				readFile: () => releaseRead.p,
+			});
+			const bothAdmitted = new DeferredPromise<void>();
+			let readLeases = 0;
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem,
+				undefined,
+				undefined,
+				2,
+				undefined,
+				undefined,
+				undefined,
+				() => {
+					if (++readLeases === 2) {
+						void bothAdmitted.complete();
+					}
+					return toDisposable(() => { });
+				}
+			);
+
+			const first = handle<ProjectsResponseBody>(
+				server,
+				'GET',
+				HUCODE_WEB_PROJECTS_API_PATH
+			);
+			const second = handle<ProjectsResponseBody>(
+				server,
+				'GET',
+				HUCODE_WEB_PROJECTS_API_PATH
+			);
+			// Admission synchronously starts each request's state load.
+			await bothAdmitted.p;
+			await releaseRead.complete();
+
+			assert.deepStrictEqual({
+				statuses: [(await first).statusCode, (await second).statusCode],
+				reads: fileSystem.readCount,
+			}, {
+				statuses: [200, 200],
+				reads: 1,
+			});
+		}
+	);
+
+	test('settles a pending project state load when the server is disposed',
+		async () => {
+			const readStarted = new DeferredPromise<void>();
+			const releaseRead = new DeferredPromise<void>();
+			const fileSystem = new TestProjectStateFileSystem({
+				readFile: async () => {
+					await readStarted.complete();
+					await releaseRead.p;
+				},
+			});
+			let activeLeases = 0;
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				() => {
+					activeLeases++;
+					return toDisposable(() => activeLeases--);
+				}
+			);
+			const service = (server as unknown as {
+				service: { dispose(): void };
+			}).service;
+			const originalDispose = service.dispose.bind(service);
+			let serviceDisposeCalls = 0;
+			service.dispose = () => {
+				serviceDisposeCalls++;
+				originalDispose();
+			};
+
+			const get = handle<ErrorResponseBody>(
+				server,
+				'GET',
+				HUCODE_WEB_PROJECTS_API_PATH
+			);
+			await readStarted.p;
+			server.dispose();
+			const duringLoad = { serviceDisposeCalls, activeLeases };
+			fileSystem.readError = createFileSystemError('EACCES');
+			await releaseRead.complete();
+			const response = await get;
+
+			assert.deepStrictEqual({
+				duringLoad,
+				response,
+				serviceDisposeCalls,
+				activeLeases,
+			}, {
+				duringLoad: { serviceDisposeCalls: 0, activeLeases: 1 },
+				response: {
+					statusCode: 503,
+					body: {
+						error: 'Project state is temporarily unavailable.',
+						code: 'PROJECT_STATE_UNAVAILABLE',
+					},
+				},
+				serviceDisposeCalls: 1,
+				activeLeases: 0,
+			});
+		}
+	);
 
 	test('treats missing project state as empty and then writable', async () => {
 		const storagePath = join(serverDataPath, 'hucode', 'projects.json');
@@ -4493,6 +4750,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				new NullLogService(),
 				fileSystem
 			);
+			await stateService.load();
 			const firstState = JSON.parse(serializeStoredProjects([{
 				id: 'first',
 				label: 'first',
@@ -4610,6 +4868,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			new NullLogService(),
 			fileSystem
 		);
+		await stateService.load();
 		const firstState = JSON.parse(serializeStoredProjects([{
 			id: 'first',
 			label: 'first',
@@ -5052,6 +5311,7 @@ function createServer(
 }
 
 interface TestProjectStateFileSystemHooks {
+	readonly readFile?: () => Promise<void>;
 	readonly writeFile?: (path: string, data: string) => Promise<void>;
 	readonly rename?: (source: string, target: string) => Promise<void>;
 }
@@ -5061,25 +5321,24 @@ class TestProjectStateFileSystem implements HucodeProjectStateFileSystem {
 	writeError: Error | undefined;
 	renameError: Error | undefined;
 	readonly existenceChecks: string[] = [];
+	readCount = 0;
 
 	constructor(
 		private readonly hooks: TestProjectStateFileSystemHooks = {}
 	) { }
 
-	readFile(path: string): string {
+	async readFile(path: string): Promise<string> {
+		this.readCount++;
+		await this.hooks.readFile?.();
 		if (this.readError) {
 			throw this.readError;
 		}
-		return nodeFs.readFileSync(path, 'utf8');
+		return fs.readFile(path, 'utf8');
 	}
 
-	renameSync(source: string, target: string): void {
-		nodeFs.renameSync(source, target);
-	}
-
-	exists(path: string): boolean {
+	async exists(path: string): Promise<boolean> {
 		this.existenceChecks.push(path);
-		return nodeFs.existsSync(path);
+		return pathExists(path);
 	}
 
 	async mkdir(path: string): Promise<void> {

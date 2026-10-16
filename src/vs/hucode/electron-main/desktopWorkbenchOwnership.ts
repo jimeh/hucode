@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { realpathSync } from 'fs';
+import { promises as fsPromises } from 'fs';
 import { Event } from '../../base/common/event.js';
 import {
 	DisposableMap,
@@ -20,6 +20,28 @@ import {
 } from '../common/hostedWorkspaceState.js';
 import { IHucodeDesktopWorkbenchOwnershipState } from
 	'../common/omniWindow.js';
+
+declare const hucodeCanonicalWorkbenchPathBrand: unique symbol;
+
+/**
+ * A desktop workbench path after symlink resolution. Only
+ * {@link resolveHucodeDesktopWorkbenchPath} and paths copied from existing
+ * ownership records produce it, so the compiler rejects an ownership key built
+ * from an unresolved path.
+ */
+export type HucodeCanonicalWorkbenchPath = string & {
+	readonly [hucodeCanonicalWorkbenchPathBrand]: true;
+};
+
+/** A requested workbench path paired with its resolved ownership key. */
+export interface IHucodeDesktopWorkbenchPath {
+	readonly displayPath: string;
+	readonly canonicalPath: HucodeCanonicalWorkbenchPath;
+}
+
+/** Looks up a path that was resolved before a synchronous batch. */
+export type HucodeDesktopWorkbenchPathLookup =
+	(path: string) => IHucodeDesktopWorkbenchPath;
 
 export type HucodeDesktopWorkbenchOwner =
 	| {
@@ -131,7 +153,7 @@ export type HucodeDesktopWorkbenchSeedOutcome =
 	};
 
 export interface IHucodeDesktopWorkbenchOwnershipClaim {
-	readonly path: string;
+	readonly path: IHucodeDesktopWorkbenchPath;
 	readonly owner: HucodeDesktopWorkbenchOwner;
 	readonly phase?: Exclude<
 		HucodeDesktopWorkbenchOwnershipPhase,
@@ -152,7 +174,6 @@ interface IInternalOwnershipRecord {
 }
 
 export interface IHucodeDesktopWorkbenchOwnershipCoordinatorOptions {
-	readonly canonicalizePath?: (path: string) => string;
 	readonly isCaseSensitive?: boolean;
 	readonly now?: () => number;
 	readonly onDidChange?: () => void;
@@ -330,6 +351,109 @@ export class HucodeRegularWindowOwnershipLifetimes implements IDisposable {
 	}
 }
 
+/** A regular window as seen by {@link HucodeRegularWindowOwnershipReconciler}. */
+export interface IHucodeRegularOwnershipReconcileDelegate<W> {
+	/** Returns the window's local workspace path, if it has one. */
+	getWorkspacePath(window: W): string | undefined;
+	/** Returns whether the window is still registered and not destroyed. */
+	isCurrent(window: W): boolean;
+	resolvePath?(path: string): Promise<IHucodeDesktopWorkbenchPath>;
+}
+
+interface IPreparedRegularOwnershipReconcile<W> {
+	readonly window: W;
+	readonly windowId: number;
+	readonly sequence: number;
+	readonly workspacePath: string | undefined;
+	readonly resolved: IHucodeDesktopWorkbenchPath | undefined;
+}
+
+/**
+ * Mirrors each regular window's opened workspace into the coordinator.
+ * Resolution is asynchronous, so each result is applied only if it is newer
+ * than the last result applied for that window, the window is still current,
+ * and the window still has the workspace that was resolved. A late result for
+ * a destroyed or retargeted window therefore seeds nothing.
+ */
+export class HucodeRegularWindowOwnershipReconciler<
+	W extends { readonly id: number; readonly isOmniWindow?: boolean }
+> implements IDisposable {
+	private sequence = 0;
+	private readonly appliedSequences = new Map<number, number>();
+	private disposed = false;
+	private readonly resolvePath: (
+		path: string
+	) => Promise<IHucodeDesktopWorkbenchPath>;
+
+	constructor(
+		private readonly coordinator:
+			HucodeDesktopWorkbenchOwnershipCoordinator,
+		private readonly delegate: IHucodeRegularOwnershipReconcileDelegate<W>
+	) {
+		this.resolvePath = delegate.resolvePath ??
+			resolveHucodeDesktopWorkbenchPath;
+	}
+
+	/** Reconciles one window. */
+	async reconcile(window: W): Promise<void> {
+		this.apply(await this.prepare(window));
+	}
+
+	/** Resolves every window first, then applies all claims in one turn. */
+	async reconcileAll(windows: readonly W[]): Promise<void> {
+		const prepared = await Promise.all(
+			windows.map(window => this.prepare(window))
+		);
+		for (const entry of prepared) {
+			this.apply(entry);
+		}
+	}
+
+	dispose(): void {
+		this.disposed = true;
+	}
+
+	private async prepare(
+		window: W
+	): Promise<IPreparedRegularOwnershipReconcile<W> | undefined> {
+		if (window.isOmniWindow) {
+			return undefined;
+		}
+		const sequence = ++this.sequence;
+		const workspacePath = this.delegate.getWorkspacePath(window);
+		return {
+			window,
+			windowId: window.id,
+			sequence,
+			workspacePath,
+			resolved: workspacePath === undefined
+				? undefined
+				: await this.resolvePath(workspacePath),
+		};
+	}
+
+	private apply(
+		entry: IPreparedRegularOwnershipReconcile<W> | undefined
+	): void {
+		if (
+			!entry ||
+			this.disposed ||
+			entry.sequence <= (this.appliedSequences.get(entry.windowId) ?? 0) ||
+			!this.delegate.isCurrent(entry.window) ||
+			this.delegate.getWorkspacePath(entry.window) !== entry.workspacePath
+		) {
+			return;
+		}
+		this.appliedSequences.set(entry.windowId, entry.sequence);
+		const owner = { kind: 'regular' as const, windowId: entry.windowId };
+		this.coordinator.reconcile(
+			candidate => candidate.kind === 'regular' &&
+				candidate.windowId === entry.windowId,
+			entry.resolved ? [{ path: entry.resolved, owner }] : []
+		);
+	}
+}
+
 export type HucodeRegularWorkbenchOpenAttempt<T> =
 	| {
 		readonly kind: 'committed';
@@ -502,6 +626,8 @@ export function waitForHucodeRegularWindowTargetCommit<T>(options: {
 export interface IHucodeRegularWorkbenchAdmissionDelegate<T> {
 	readonly coordinator: HucodeDesktopWorkbenchOwnershipCoordinator;
 	readonly path: string;
+	/** Resolves `path` before each reservation attempt. */
+	resolvePath?(path: string): Promise<IHucodeDesktopWorkbenchPath>;
 	readonly pendingOwner: Extract<
 		HucodeDesktopWorkbenchOwner,
 		{ readonly kind: 'regular' }
@@ -520,9 +646,12 @@ export interface IHucodeRegularWorkbenchAdmissionDelegate<T> {
 export async function admitHucodeRegularWorkbench<T>(
 	delegate: IHucodeRegularWorkbenchAdmissionDelegate<T>
 ): Promise<HucodeRegularWorkbenchAdmissionOutcome<T>> {
+	const resolvePath = delegate.resolvePath ?? resolveHucodeDesktopWorkbenchPath;
 	while (true) {
+		// Resolve at each attempt, after every wait, so a symlink retargeted
+		// while this admission waited is admitted under its current target.
 		const admission = delegate.coordinator.reserve(
-			delegate.path,
+			await resolvePath(delegate.path),
 			delegate.pendingOwner,
 			{ routeRecoveringOwner: true }
 		);
@@ -601,10 +730,12 @@ export async function admitHucodeRegularWorkbench<T>(
 /**
  * Main-process authority for one live desktop workbench per canonical path.
  * Mutations are synchronous so one JavaScript turn is one atomic admission.
+ * Callers resolve paths with {@link resolveHucodeDesktopWorkbenchPath} before
+ * that turn. A symlink retargeted between resolution and admission keeps the
+ * key it resolved to, just as a token keeps its original key afterwards.
  */
 export class HucodeDesktopWorkbenchOwnershipCoordinator {
 	private readonly records = new Map<string, IInternalOwnershipRecord>();
-	private readonly canonicalizePath: (path: string) => string;
 	private readonly isCaseSensitive: boolean;
 	private readonly now: () => number;
 	private readonly onDidChange: () => void;
@@ -613,8 +744,6 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 	constructor(
 		options: IHucodeDesktopWorkbenchOwnershipCoordinatorOptions = {}
 	) {
-		this.canonicalizePath = options.canonicalizePath ??
-			canonicalizeDesktopWorkbenchPath;
 		this.isCaseSensitive = options.isCaseSensitive ?? isLinux;
 		this.now = options.now ?? Date.now;
 		this.onDidChange = options.onDidChange ?? (() => { });
@@ -624,7 +753,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		return Array.from(this.records.values(), record => record.ownership);
 	}
 
-	lookup(path: string): HucodeDesktopWorkbenchOwnershipLookup {
+	lookup(path: IHucodeDesktopWorkbenchPath): HucodeDesktopWorkbenchOwnershipLookup {
 		const record = this.records.get(this.toKey(path));
 		return record
 			? { kind: 'current-owner', ownership: record.ownership }
@@ -632,11 +761,11 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 	}
 
 	reserve(
-		path: string,
+		path: IHucodeDesktopWorkbenchPath,
 		owner: HucodeDesktopWorkbenchOwner,
 		options: IHucodeDesktopWorkbenchReservationOptions = {}
 	): HucodeDesktopWorkbenchReservationOutcome {
-		const canonicalPath = this.canonicalizePath(path);
+		const canonicalPath = path.canonicalPath;
 		const key = this.toCanonicalKey(canonicalPath);
 		const existing = this.records.get(key);
 		if (existing) {
@@ -666,7 +795,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		const createdAt = this.now();
 		const ownership: IHucodeDesktopWorkbenchOwnership = {
 			canonicalPath,
-			displayPath: path,
+			displayPath: path.displayPath,
 			owner,
 			generation: ++this.generation,
 			phase: 'reserved',
@@ -786,7 +915,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 	seed(
 		claim: IHucodeDesktopWorkbenchOwnershipClaim
 	): HucodeDesktopWorkbenchSeedOutcome {
-		const canonicalPath = this.canonicalizePath(claim.path);
+		const canonicalPath = claim.path.canonicalPath;
 		const key = this.toCanonicalKey(canonicalPath);
 		const existing = this.records.get(key);
 		if (existing) {
@@ -803,7 +932,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		const createdAt = this.now();
 		const ownership: IHucodeDesktopWorkbenchOwnership = {
 			canonicalPath,
-			displayPath: claim.path,
+			displayPath: claim.path.displayPath,
 			owner: claim.owner,
 			generation: ++this.generation,
 			phase: claim.phase ?? 'live',
@@ -878,8 +1007,8 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		};
 	}
 
-	private toKey(path: string): string {
-		return this.toCanonicalKey(this.canonicalizePath(path));
+	private toKey(path: IHucodeDesktopWorkbenchPath): string {
+		return this.toCanonicalKey(path.canonicalPath);
 	}
 
 	private toCanonicalKey(path: string): string {
@@ -893,16 +1022,15 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 /** Selects one persisted restore winner per canonical desktop path. */
 export function selectHucodeDesktopRestoreWinners(
 	candidates: readonly IHucodeDesktopRestoreCandidate[],
+	resolvePath: HucodeDesktopWorkbenchPathLookup,
 	options: Pick<IHucodeDesktopWorkbenchOwnershipCoordinatorOptions,
-		'canonicalizePath' | 'isCaseSensitive'> = {}
+		'isCaseSensitive'> = {}
 ): ReadonlyMap<string, IHucodeDesktopRestoreCandidate> {
-	const canonicalizePath = options.canonicalizePath ??
-		canonicalizeDesktopWorkbenchPath;
 	const isCaseSensitive = options.isCaseSensitive ?? isLinux;
 	const winners = new Map<string, IHucodeDesktopRestoreCandidate>();
 	for (const candidate of candidates) {
 		const key = getProjectManagerPathComparisonKey(
-			canonicalizePath(candidate.path),
+			resolvePath(candidate.path).canonicalPath,
 			isCaseSensitive
 		);
 		const current = winners.get(key);
@@ -925,10 +1053,10 @@ export function getHucodeRetainedRestoreCandidateId(id: string): string {
 }
 
 export function getHucodeLegacyRetainedRestoreCandidateId(
-	path: string
+	path: IHucodeDesktopWorkbenchPath
 ): string {
 	return `legacy-retained:${getProjectManagerPathComparisonKey(
-		canonicalizeDesktopWorkbenchPath(path),
+		path.canonicalPath,
 		isLinux
 	)}`;
 }
@@ -936,6 +1064,7 @@ export function getHucodeLegacyRetainedRestoreCandidateId(
 /** Joins global metadata to one window's lifecycle state for restore claims. */
 export function projectHucodeDesktopRetainedRestoreWorkbenches(
 	source: IHucodeDesktopRetainedRestoreProjectionSource,
+	resolvePath: HucodeDesktopWorkbenchPathLookup,
 	pathsEqual: (left: string, right: string) => boolean =
 		(left, right) => left === right
 ): IHucodeDesktopRestoreWindowSource['retainedWorkbenches'] {
@@ -975,7 +1104,7 @@ export function projectHucodeDesktopRetainedRestoreWorkbenches(
 		add({
 			path: global?.path ?? pending.path,
 			id: global?.id ?? getHucodeLegacyRetainedRestoreCandidateId(
-				pending.path
+				resolvePath(pending.path)
 			),
 			desiredState: 'loaded',
 			lastActiveAt: pending.lastActiveAt,
@@ -987,6 +1116,7 @@ export function projectHucodeDesktopRetainedRestoreWorkbenches(
 /** Builds the restore claims the controller will submit for one Omni window. */
 export function createHucodeDesktopRestoreCandidates(
 	source: IHucodeDesktopRestoreWindowSource,
+	resolvePath: HucodeDesktopWorkbenchPathLookup,
 	pathsEqual: (left: string, right: string) => boolean =
 		(left, right) => left === right
 ): readonly IHucodeDesktopRestoreCandidate[] {
@@ -1036,7 +1166,9 @@ export function createHucodeDesktopRestoreCandidates(
 		);
 		const stableInstanceId = retained
 			? getHucodeRetainedRestoreCandidateId(retained.id)
-			: getHucodeLegacyRetainedRestoreCandidateId(resident.path);
+			: getHucodeLegacyRetainedRestoreCandidateId(
+				resolvePath(resident.path)
+			);
 		const path = retained?.path ?? resident.path;
 		retainedCandidates.set(stableInstanceId, {
 			path,
@@ -1049,6 +1181,103 @@ export function createHucodeDesktopRestoreCandidates(
 	}
 
 	return [...projectCandidates, ...retainedCandidates.values()];
+}
+
+/** One Omni window's persisted restore state for cross-window arbitration. */
+export interface IHucodeDesktopRestoreArbitrationWindow {
+	readonly windowId: number;
+	readonly windowLastFocusTime: number;
+	readonly activeWorktreePath?: string;
+	readonly residentWorkspaces:
+	IHucodeDesktopRestoreWindowSource['residentWorkspaces'];
+	readonly retainedWorkbenches:
+	IHucodeDesktopRetainedRestoreProjectionSource['legacyRetainedWorkbenches'];
+	readonly overlays: IHucodeDesktopRetainedRestoreProjectionSource['overlays'];
+	readonly pendingAdoptions:
+	IHucodeDesktopRetainedRestoreProjectionSource['pendingAdoptions'];
+}
+
+/** Persisted restore state of every window, for one arbitration pass. */
+export interface IHucodeDesktopRestoreArbitrationSource {
+	readonly globalWorkbenches:
+	IHucodeDesktopRetainedRestoreProjectionSource['globalWorkbenches'];
+	readonly windows: readonly IHucodeDesktopRestoreArbitrationWindow[];
+}
+
+/** Lists every path restore arbitration resolves, for pre-resolution. */
+export function getHucodeDesktopRestoreArbitrationPaths(
+	source: IHucodeDesktopRestoreArbitrationSource,
+	candidates: readonly { readonly path: string }[]
+): string[] {
+	return [
+		...source.globalWorkbenches.map(workbench => workbench.path),
+		...source.windows.flatMap(window => [
+			...window.residentWorkspaces.map(entry => entry.path),
+			...window.retainedWorkbenches.map(entry => entry.path),
+			...window.pendingAdoptions.map(entry => entry.path),
+		]),
+		...candidates.map(candidate => candidate.path),
+	];
+}
+
+/**
+ * Decides which of one window's restore candidates win cross-window
+ * arbitration. The winners are computed once for the whole batch; each
+ * decision matches a separate per-candidate check against them.
+ */
+export function selectHucodeDesktopRestoreCandidates(
+	windowId: number,
+	candidates: readonly Pick<
+		IHucodeDesktopRestoreCandidate,
+		'path' | 'stableInstanceId'
+	>[],
+	source: IHucodeDesktopRestoreArbitrationSource,
+	resolvePath: HucodeDesktopWorkbenchPathLookup,
+	options: {
+		readonly pathsEqual: (left: string, right: string) => boolean;
+		readonly isCaseSensitive?: boolean;
+	}
+): readonly boolean[] {
+	const { pathsEqual } = options;
+	const isCaseSensitive = options.isCaseSensitive ?? isLinux;
+	const allCandidates = source.windows.flatMap(window =>
+		createHucodeDesktopRestoreCandidates({
+			windowId: window.windowId,
+			windowLastFocusTime: window.windowLastFocusTime,
+			activeWorktreePath: window.activeWorktreePath,
+			residentWorkspaces: window.residentWorkspaces,
+			retainedWorkbenches: projectHucodeDesktopRetainedRestoreWorkbenches({
+				globalWorkbenches: source.globalWorkbenches,
+				overlays: window.overlays,
+				legacyRetainedWorkbenches: window.retainedWorkbenches,
+				pendingAdoptions: window.pendingAdoptions,
+			}, resolvePath, pathsEqual),
+		}, resolvePath, pathsEqual)
+	);
+	const winners = selectHucodeDesktopRestoreWinners(
+		allCandidates,
+		resolvePath,
+		{ isCaseSensitive }
+	);
+	const ownWindow = source.windows.find(window =>
+		window.windowId === windowId
+	);
+	return candidates.map(candidate => {
+		const winner = winners.get(getProjectManagerPathComparisonKey(
+			resolvePath(candidate.path).canonicalPath,
+			isCaseSensitive
+		));
+		if (winner?.windowId !== windowId) {
+			return false;
+		}
+		if (winner.stableInstanceId === candidate.stableInstanceId) {
+			return true;
+		}
+		return !!ownWindow?.pendingAdoptions.some(pending =>
+			pending.desiredState === 'loaded' &&
+			pathsEqual(pending.path, candidate.path)
+		);
+	});
 }
 
 /** Runs a generation-safe hosted-to-regular ownership transfer. */
@@ -1076,13 +1305,14 @@ export async function transferHucodeDesktopWorkbenchToRegularWindow(
 			: { kind: 'superseded' };
 	}
 
-	const afterClose = coordinator.lookup(ownership.canonicalPath);
+	const ownershipPath = getHucodeDesktopWorkbenchPathOf(ownership);
+	const afterClose = coordinator.lookup(ownershipPath);
 	if (afterClose.kind !== 'absent') {
 		return { kind: 'superseded' };
 	}
 
 	const pendingOwner = { kind: 'regular' as const, windowId: 0 };
-	const reserved = coordinator.reserve(ownership.displayPath, pendingOwner);
+	const reserved = coordinator.reserve(ownershipPath, pendingOwner);
 	if (reserved.kind !== 'reserved') {
 		return { kind: 'superseded' };
 	}
@@ -1108,7 +1338,7 @@ export async function transferHucodeDesktopWorkbenchToRegularWindow(
 			recovery = { kind: 'failed', error: recoveryError };
 		}
 		if (recovery.kind === 'restored') {
-			const current = coordinator.lookup(ownership.canonicalPath);
+			const current = coordinator.lookup(ownershipPath);
 			if (current.kind !== 'current-owner' ||
 				current.ownership.generation !== recovery.ownership.generation ||
 				current.ownership.owner.kind !== 'hosted' ||
@@ -1129,11 +1359,147 @@ export async function transferHucodeDesktopWorkbenchToRegularWindow(
 	}
 }
 
+/** Shell effects used by {@link routeHucodeDesktopWorkspaceOpen}. */
+export interface IHucodeDesktopWorkspaceRouteDelegate {
+	readonly coordinator: HucodeDesktopWorkbenchOwnershipCoordinator;
+	/** The Omni window the open was requested in. */
+	readonly windowId: number;
+	readonly worktreePath: string;
+	readonly projectId?: string;
+	/** Whether the request still applies; checked before every effect. */
+	canApply(): boolean;
+	resolvePath?(path: string): Promise<IHucodeDesktopWorkbenchPath>;
+	/**
+	 * Records a project-less folder in the catalog. The result's `apply`
+	 * publishes the updated catalog once the route still applies.
+	 */
+	addFolderToCatalog(worktreePath: string): Promise<{
+		readonly worktreePath: string;
+		readonly projectId?: string;
+		apply(): void;
+	}>;
+	/** Opens the folder as a hosted workbench in the requesting window. */
+	openInRequestingWindow(
+		worktreePath: string,
+		projectId: string | undefined
+	): Promise<void>;
+	/** Focuses a regular owner; returns false when its window is gone. */
+	focusRegularOwner(windowId: number): boolean;
+	/** Reopens a hosted owner in its window; returns false when it is stale. */
+	openHostedOwner(
+		ownership: IHucodeDesktopWorkbenchOwnership,
+		projectId: string | undefined
+	): Promise<boolean>;
+	focusHostedOwner(ownership: IHucodeDesktopWorkbenchOwnership): void;
+}
+
+/**
+ * Focuses the current owner of a desktop workbench path, or opens it as a
+ * hosted workbench in the requesting window when nobody owns it.
+ */
+export async function routeHucodeDesktopWorkspaceOpen(
+	delegate: IHucodeDesktopWorkspaceRouteDelegate
+): Promise<HucodeDesktopWorkbenchRouteOutcome> {
+	const { coordinator, windowId } = delegate;
+	let { worktreePath, projectId } = delegate;
+	const resolvePath = delegate.resolvePath ?? resolveHucodeDesktopWorkbenchPath;
+	// Every coordinator call below resolves the path after the last await
+	// before it, as the synchronous canonicalization did. The request can
+	// stop applying while a resolution is pending, so each one re-checks
+	// before its result is used; `undefined` means the route is superseded.
+	const resolveCurrent = async () => {
+		const path = await resolvePath(worktreePath);
+		return delegate.canApply() ? path : undefined;
+	};
+	for (let attempt = 0; attempt < 4; attempt++) {
+		const path = await resolveCurrent();
+		if (!path) {
+			return { kind: 'superseded' };
+		}
+		const lookup = coordinator.lookup(path);
+		if (lookup.kind === 'absent') {
+			if (!projectId) {
+				const target = await delegate.addFolderToCatalog(worktreePath);
+				if (!delegate.canApply()) {
+					return { kind: 'superseded' };
+				}
+				projectId = target.projectId;
+				// The catalog can canonicalize the folder; key ownership by
+				// the path that is actually opened.
+				worktreePath = target.worktreePath;
+				target.apply();
+			}
+			await delegate.openInRequestingWindow(worktreePath, projectId);
+			if (!delegate.canApply()) {
+				return { kind: 'superseded' };
+			}
+			const openedPath = await resolveCurrent();
+			if (!openedPath) {
+				return { kind: 'superseded' };
+			}
+			const opened = coordinator.lookup(openedPath);
+			if (opened.kind === 'absent') {
+				return { kind: 'failed' };
+			}
+			if (opened.ownership.owner.kind === 'hosted' &&
+				opened.ownership.owner.windowId === windowId) {
+				delegate.focusHostedOwner(opened.ownership);
+				return { kind: 'opened-hosted', ownership: opened.ownership };
+			}
+			continue;
+		}
+		if (lookup.ownership.phase === 'reserved' ||
+			lookup.ownership.phase === 'transferring') {
+			const pending = coordinator.reserve(path, {
+				kind: 'hosted',
+				windowId,
+				instanceId: `route:${windowId}`,
+			});
+			if (pending.kind === 'reserved-conflict') {
+				await pending.settled;
+				continue;
+			}
+			if (pending.kind === 'reserved') {
+				coordinator.release(pending.reservation);
+				continue;
+			}
+		}
+
+		const owner = lookup.ownership.owner;
+		if (owner.kind === 'regular') {
+			if (!delegate.focusRegularOwner(owner.windowId)) {
+				coordinator.release(toToken(lookup.ownership));
+				continue;
+			}
+			return { kind: 'focused-regular', ownership: lookup.ownership };
+		}
+
+		if (!await delegate.openHostedOwner(lookup.ownership, projectId)) {
+			continue;
+		}
+		if (!delegate.canApply()) {
+			return { kind: 'superseded' };
+		}
+		const currentPath = await resolveCurrent();
+		if (!currentPath) {
+			return { kind: 'superseded' };
+		}
+		const current = coordinator.lookup(currentPath);
+		if (current.kind === 'current-owner' &&
+			current.ownership.owner.kind === 'hosted' &&
+			current.ownership.owner.windowId === owner.windowId) {
+			delegate.focusHostedOwner(current.ownership);
+			return { kind: 'focused-hosted', ownership: current.ownership };
+		}
+	}
+	return { kind: 'superseded' };
+}
+
 function restoreHucodeTransferringOwner(
 	coordinator: HucodeDesktopWorkbenchOwnershipCoordinator,
 	token: IHucodeDesktopWorkbenchOwnershipToken
 ): boolean {
-	const current = coordinator.lookup(token.canonicalPath);
+	const current = coordinator.lookup(getHucodeDesktopWorkbenchPathOf(token));
 	return current.kind === 'current-owner' &&
 		current.ownership.generation === token.generation &&
 		ownersEqual(current.ownership.owner, token.owner) &&
@@ -1189,15 +1555,61 @@ export function validateHucodeDesktopHostedOwnership<
 	return instance;
 }
 
-/** Resolves symlinks for existing paths and normalizes missing restore paths. */
-export function canonicalizeDesktopWorkbenchPath(path: string): string {
+/**
+ * Resolves symlinks for an existing path and normalizes a missing one. Uses the
+ * native realpath, like `realpathSync.native`, so Windows `subst` drives
+ * resolve to their target.
+ */
+export async function resolveHucodeDesktopWorkbenchPath(
+	path: string
+): Promise<IHucodeDesktopWorkbenchPath> {
 	const absolutePath = normalize(resolve(path));
+	let canonicalPath: string;
 	try {
-		// eslint-disable-next-line local/code-no-sync-fs -- TODO: canonicalize paths before the synchronous restore-candidate and ownership-key builders that call this helper.
-		return realpathSync.native(absolutePath);
+		canonicalPath = await fsPromises.realpath(absolutePath);
 	} catch {
-		return absolutePath;
+		canonicalPath = absolutePath;
 	}
+	return {
+		displayPath: path,
+		canonicalPath: canonicalPath as HucodeCanonicalWorkbenchPath,
+	};
+}
+
+/**
+ * Resolves paths concurrently for a synchronous batch. The lookup throws for a
+ * path that was not resolved, so a missed path fails loudly instead of
+ * silently skipping symlink resolution.
+ */
+export async function resolveHucodeDesktopWorkbenchPaths(
+	paths: Iterable<string>,
+	resolvePath: (path: string) => Promise<IHucodeDesktopWorkbenchPath> =
+		resolveHucodeDesktopWorkbenchPath
+): Promise<HucodeDesktopWorkbenchPathLookup> {
+	const unique = Array.from(new Set(paths));
+	const resolved = await Promise.all(unique.map(path => resolvePath(path)));
+	const byPath = new Map(unique.map((path, index) => [path, resolved[index]]));
+	return path => {
+		const entry = byPath.get(path);
+		if (!entry) {
+			throw new Error(
+				`Desktop workbench path was not resolved before use: ${path}`
+			);
+		}
+		return entry;
+	};
+}
+
+/** Reuses the resolved key of an existing ownership record or token. */
+export function getHucodeDesktopWorkbenchPathOf(
+	source: Pick<IHucodeDesktopWorkbenchOwnershipToken, 'canonicalPath'> &
+		Partial<Pick<IHucodeDesktopWorkbenchOwnership, 'displayPath'>>
+): IHucodeDesktopWorkbenchPath {
+	return {
+		displayPath: source.displayPath ?? source.canonicalPath,
+		// The coordinator only stores keys that were resolved on entry.
+		canonicalPath: source.canonicalPath as HucodeCanonicalWorkbenchPath,
+	};
 }
 
 function ownersEqual(

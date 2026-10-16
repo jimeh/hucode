@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { EventEmitter } from 'events';
-import { mkdirSync, rmSync } from 'fs';
+import { mkdirSync, realpathSync, rmSync, Stats, statSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { DeferredPromise, timeout } from '../../../base/common/async.js';
 import { basename, join } from '../../../base/common/path.js';
@@ -42,15 +42,36 @@ import {
 	IHostedWorkbenchView,
 	IHostedWorkbenchViewFactory,
 	IHostedWorkspaceIpcMain,
+	IHucodeHostedRestoreCandidate,
 	IResidentHostedWorkspacesControllerOptions,
 	isHostedWorkspaceFolderUnavailableError,
 	ResidentHostedWorkspacesController,
 } from '../../electron-main/hostedWorkspacesController.js';
 import {
 	createHucodeDesktopRestoreCandidates,
+	getHucodeLegacyRetainedRestoreCandidateId,
+	type HucodeCanonicalWorkbenchPath,
 	HucodeDesktopWorkbenchOwnershipCoordinator,
+	type IHucodeDesktopWorkbenchPath,
 	selectHucodeDesktopRestoreWinners,
+	transferHucodeDesktopWorkbenchToRegularWindow,
 } from '../../electron-main/desktopWorkbenchOwnership.js';
+
+/** Resolves an ownership key the way the controller does, synchronously. */
+function resolvedPath(path: string): IHucodeDesktopWorkbenchPath {
+	let canonicalPath: string;
+	try {
+		// `realpathSync.native` is not usable in the Electron test renderer and
+		// would silently fall back to the unresolved path.
+		canonicalPath = realpathSync(path);
+	} catch {
+		canonicalPath = path;
+	}
+	return {
+		displayPath: path,
+		canonicalPath: canonicalPath as HucodeCanonicalWorkbenchPath,
+	};
+}
 import { ensureHucodeHostedFolderInCatalog } from '../../electron-main/omniWorkspaceOpen.js';
 import {
 	IHostedWorkspaceContractState,
@@ -470,6 +491,62 @@ class TestBrowserViewMainService {
 	}
 }
 
+interface IHeldStatCall {
+	readonly path: string;
+	/** Settles with the folder's real stat at release time. */
+	release(): void;
+	/** Rejects with a file-system error code regardless of the folder. */
+	fail(code: string): void;
+}
+
+/** Stat double that parks selected calls until a test settles them. */
+class HeldStat {
+	private readonly holds = new Map<string, number>();
+	private readonly pending: IHeldStatCall[] = [];
+	readonly calls: string[] = [];
+
+	/** Parks the next `count` stat calls for a path. */
+	hold(path: string, count = 1): void {
+		this.holds.set(path, (this.holds.get(path) ?? 0) + count);
+	}
+
+	readonly stat = (path: string): Promise<Stats> => {
+		this.calls.push(path);
+		const remaining = this.holds.get(path) ?? 0;
+		if (!remaining) {
+			return (async () => statSync(path))();
+		}
+		this.holds.set(path, remaining - 1);
+		return new Promise<Stats>((resolve, reject) => {
+			this.pending.push({
+				path,
+				release: () => {
+					try {
+						resolve(statSync(path));
+					} catch (error) {
+						reject(error);
+					}
+				},
+				fail: code => reject(Object.assign(new Error(code), { code })),
+			});
+		});
+	};
+
+	/** Waits for the next parked call for a path. */
+	async next(path: string): Promise<IHeldStatCall> {
+		for (let attempt = 0; attempt < 100; attempt++) {
+			const index = this.pending.findIndex(call => call.path === path);
+			if (index >= 0) {
+				return this.pending.splice(index, 1)[0];
+			}
+			await timeout(0);
+		}
+		throw new Error(
+			`No held stat for ${path}; calls: ${JSON.stringify(this.calls)}`
+		);
+	}
+}
+
 suite('ResidentHostedWorkspacesController', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let tempRoot: string;
@@ -533,10 +610,16 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly shellProfile?: IUserDataProfile;
 		readonly ownershipCoordinator?:
 		HucodeDesktopWorkbenchOwnershipCoordinator;
-		readonly shouldRestoreCandidate?: IResidentHostedWorkspacesControllerOptions[
-		'shouldRestoreCandidate'];
+		readonly shouldRestoreCandidate?: (
+			candidate: IHucodeHostedRestoreCandidate
+		) => boolean;
+		readonly resolvePath?: IResidentHostedWorkspacesControllerOptions[
+		'resolvePath'];
+		readonly selectRestoreCandidates?: IResidentHostedWorkspacesControllerOptions[
+		'selectRestoreCandidates'];
 		readonly beforeRestore?: () => Promise<void>;
 		readonly activateApplication?: () => void;
+		readonly stat?: IResidentHostedWorkspacesControllerOptions['stat'];
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -665,11 +748,19 @@ suite('ResidentHostedWorkspacesController', () => {
 					options.overlayCaptureSettleTimeoutMs,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
-				shouldRestoreCandidate: options.shouldRestoreCandidate,
+				selectRestoreCandidates: options.selectRestoreCandidates ??
+					(options.shouldRestoreCandidate &&
+						(async candidates =>
+							candidates.map(options.shouldRestoreCandidate!))),
+				resolvePath: options.resolvePath ??
+					(async path => resolvedPath(path)),
 				beforeRestore: options.beforeRestore,
 				viewFactory,
 				ipc: ipcMain,
 				activateApplication: options.activateApplication,
+				// Resolve stats within microtasks by default so tests that step
+				// through attach with `Promise.resolve()` stay deterministic.
+				stat: options.stat ?? (async path => statSync(path)),
 			}
 		));
 
@@ -804,7 +895,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			fixture.workspaceProfileOverrides.set(URI.file(worktreePath).toString(), imported);
 		});
 		await entered.p;
-		assert.strictEqual(coordinator.lookup(worktreePath).kind, 'current-owner');
+		assert.strictEqual(coordinator.lookup(resolvedPath(worktreePath)).kind, 'current-owner');
 		assert.strictEqual(fixture.viewFactory.views.length, 0);
 		save.complete();
 		await opening;
@@ -816,7 +907,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator();
 		const fixture = createController({ ownershipCoordinator: coordinator });
 		await assert.rejects(fixture.controller.openAdmittedWorkspace(worktreePath, undefined, () => true, () => true, async () => { throw new Error('profile save failed'); }), /profile save failed/);
-		assert.deepStrictEqual({ owner: coordinator.lookup(worktreePath).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
+		assert.deepStrictEqual({ owner: coordinator.lookup(resolvedPath(worktreePath)).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
 	});
 
 	test('shutdown or supersession during onboarding persistence prevents late view creation', async () => {
@@ -833,7 +924,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			else { current = false; }
 			save.complete();
 			await opening;
-			assert.deepStrictEqual({ owner: coordinator.lookup(worktreePath).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
+			assert.deepStrictEqual({ owner: coordinator.lookup(resolvedPath(worktreePath)).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
 		}
 	});
 
@@ -907,7 +998,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			URI.file(worktreePath).toString(),
 			secondProfile
 		);
-		fixture.controller.reloadWorkspace();
+		await fixture.controller.reloadWorkspace();
 
 		const configuration = fixture.protocolMainService.objectUrls[0]
 			.value as INativeWindowConfiguration;
@@ -951,7 +1042,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			secondInstances: 0,
 			secondViews: 0,
 		});
-		const owner = ownershipCoordinator.lookup(worktreePath);
+		const owner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 		assert.strictEqual(owner.kind, 'current-owner');
 		assert.deepStrictEqual(
 			owner.kind === 'current-owner' && owner.ownership.owner,
@@ -1055,7 +1146,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const ownershipCoordinator =
 				new HucodeDesktopWorkbenchOwnershipCoordinator();
 			ownershipCoordinator.seed({
-				path: worktreePath,
+				path: resolvedPath(worktreePath),
 				owner: { kind: 'regular', windowId: 42 },
 			});
 			const fixture = createController({ ownershipCoordinator });
@@ -1156,7 +1247,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			first.viewFactory.views[0].rawWebContents.emit(
 				'render-process-gone'
 			);
-			const recovering = ownershipCoordinator.lookup(worktreePath);
+			const recovering = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			assert.strictEqual(
 				recovering.kind === 'current-owner' &&
 				recovering.ownership.phase,
@@ -1174,7 +1265,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			await first.controller.closeWorkspace('first-instance');
 			await secondOpen;
 
-			const owner = ownershipCoordinator.lookup(worktreePath);
+			const owner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			assert.strictEqual(owner.kind, 'current-owner');
 			assert.deepStrictEqual(
 				owner.kind === 'current-owner' && owner.ownership.owner,
@@ -1203,7 +1294,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				windowId: 2,
 			});
 			await first.controller.openAdmittedWorkspace(worktreePath, 'project');
-			const lookup = ownershipCoordinator.lookup(worktreePath);
+			const lookup = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			if (lookup.kind !== 'current-owner') {
 				assert.fail('expected first hosted owner');
 			}
@@ -1231,7 +1322,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			await first.controller.closeWorkspace('first-instance');
 			await secondOpen;
 			assert.strictEqual(second.viewFactory.views.length, 1);
-			const owner = ownershipCoordinator.lookup(worktreePath);
+			const owner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			assert.deepStrictEqual(
 				owner.kind === 'current-owner' && owner.ownership.owner,
 				{
@@ -1272,7 +1363,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		) {
 			await Promise.resolve();
 		}
-		const recoveryOwner = ownershipCoordinator.lookup(worktreePath);
+		const recoveryOwner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 		assert.deepStrictEqual(
 			recoveryOwner.kind === 'current-owner' &&
 			recoveryOwner.ownership.owner,
@@ -1337,7 +1428,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			fixture.controller.getState().instances[0].state,
 			'restore-pending'
 		);
-		const pendingOwner = ownershipCoordinator.lookup(worktreePath);
+		const pendingOwner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 		assert.strictEqual(
 			pendingOwner.kind === 'current-owner' &&
 			pendingOwner.ownership.phase,
@@ -1383,10 +1474,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 			assert.strictEqual(second.viewFactory.views.length, 0);
 			assert.strictEqual(
-				ownershipCoordinator.lookup(worktreePath).kind,
+				ownershipCoordinator.lookup(resolvedPath(worktreePath)).kind,
 				'current-owner'
 			);
-			const dormantOwner = ownershipCoordinator.lookup(worktreePath);
+			const dormantOwner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			assert.deepStrictEqual(
 				dormantOwner.kind === 'current-owner' &&
 				dormantOwner.ownership.owner,
@@ -1399,7 +1490,7 @@ suite('ResidentHostedWorkspacesController', () => {
 
 			first.controller.dispose();
 			assert.deepStrictEqual(
-				ownershipCoordinator.lookup(worktreePath),
+				ownershipCoordinator.lookup(resolvedPath(worktreePath)),
 				{ kind: 'absent' }
 			);
 		}
@@ -1930,7 +2021,9 @@ suite('ResidentHostedWorkspacesController', () => {
 				activeWorktreePath: scratch,
 				shouldRestoreCandidate: candidate =>
 					candidate.stableInstanceId ===
-					`legacy-retained:${scratch}`,
+					getHucodeLegacyRetainedRestoreCandidateId(
+						resolvedPath(scratch)
+					),
 			});
 
 			await controller.ensureRestored();
@@ -1954,10 +2047,12 @@ suite('ResidentHostedWorkspacesController', () => {
 					activeWorktreePath: scratch,
 					residentWorkspaces: [{ path: scratch }],
 					retainedWorkbenches: [],
-				})
+				}, resolvedPath)
 			);
-			const winner = selectHucodeDesktopRestoreWinners(candidates)
-				.values().next().value;
+			const winner = selectHucodeDesktopRestoreWinners(
+				candidates,
+				resolvedPath
+			).values().next().value;
 			assert.ok(winner);
 			const createRestoreFilter = (windowId: number) =>
 				(candidate: { path: string; stableInstanceId: string }) =>
@@ -3010,7 +3105,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		controller.notifyHostedWorkspaceReady('instance-2');
 
 		assert.strictEqual(viewFactory.views.length, 2);
-		const ownership = ownershipCoordinator.lookup(alpha);
+		const ownership = ownershipCoordinator.lookup(resolvedPath(alpha));
 		assert.deepStrictEqual(
 			ownership.kind === 'current-owner' && ownership.ownership.owner,
 			{ kind: 'hosted', windowId: 1, instanceId: 'instance-2' }
@@ -6230,7 +6325,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const authority = controller.getHostedShellAuthorityState(forged);
 			assert.strictEqual(authority.disposed, true);
 			assert.strictEqual(authority.connectionGeneration, -1);
-			assert.strictEqual(controller.reloadHostedShellSelf({
+			assert.strictEqual(await controller.reloadHostedShellSelf({
 				...forged,
 				connectionGeneration: authority.connectionGeneration,
 			}), false);
@@ -6260,7 +6355,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			const stale = controller.acquireHostedShellBinding(1)!;
 			viewFactory.views[0].rawWebContents.startNavigation(false, true);
 
-			assert.strictEqual(controller.reloadHostedShellSelf(stale), false);
+			assert.strictEqual(
+				await controller.reloadHostedShellSelf(stale),
+				false
+			);
 			assert.strictEqual(controller.focusHostedShellSelf(stale), false);
 			assert.strictEqual(
 				controller.triggerPasteInHostedShellSelf(stale),
@@ -6271,7 +6369,10 @@ suite('ResidentHostedWorkspacesController', () => {
 				URI.file(alpha).toString(),
 				secondProfile
 			);
-			assert.strictEqual(controller.reloadHostedShellSelf(current), true);
+			assert.strictEqual(
+				await controller.reloadHostedShellSelf(current),
+				true
+			);
 			assert.strictEqual(
 				viewFactory.views[0].rawWebContents.reloadCalls.length,
 				1
@@ -6815,4 +6916,1374 @@ suite('ResidentHostedWorkspacesController', () => {
 				'loaded'
 			);
 		});
+	suite('asynchronous folder stats', () => {
+		function retainedRecord(id: string, path: string) {
+			return {
+				id,
+				folderUri: URI.file(path).toJSON(),
+				desiredState: 'loaded' as const,
+				order: 0,
+			};
+		}
+
+		function retainedStatus(controller: ResidentHostedWorkspacesController) {
+			return controller.getState().retainedWorkbenches?.map(record => ({
+				desiredState: record.desiredState,
+				folderStatus: record.folderStatus,
+			}));
+		}
+
+		/** Reports which workbench is active and whether its view is shown. */
+		function activation(
+			controller: ResidentHostedWorkspacesController,
+			viewFactory: TestHostedWorkbenchViewFactory
+		) {
+			const state = controller.getState();
+			return {
+				activeInstanceId: state.activeInstanceId,
+				visible: state.instances.map(instance => instance.visible),
+				viewShown: viewFactory.views.map(view => view.visibleCalls.at(-1)),
+			};
+		}
+
+		/**
+		 * Drains the microtask queue. A released stat settles the controller's
+		 * continuation through microtasks only, so one macrotask turn is a
+		 * complete ordering boundary for it.
+		 */
+		function drainMicrotasks(): Promise<void> {
+			return timeout(0);
+		}
+
+		test('restore treats a folder removed during its stat as missing',
+			async () => {
+				const scratch = createWorktree('vanishing-restore');
+				const heldStat = new HeldStat();
+				heldStat.hold(scratch);
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, protocolMainService, viewFactory } =
+					createController({
+						activeWorktreePath: scratch,
+						retainedWorkbenches: [
+							retainedRecord('vanishing', scratch),
+						],
+						ownershipCoordinator,
+						stat: heldStat.stat,
+					});
+
+				const restoring = controller.ensureRestored();
+				const statCall = await heldStat.next(scratch);
+				assert.deepStrictEqual({
+					states: controller.getState().instances.map(
+						instance => instance.state
+					),
+					owners: ownershipCoordinator.snapshot().length,
+				}, { states: ['restore-pending'], owners: 1 });
+				rmSync(scratch, { recursive: true, force: true });
+				statCall.release();
+				await restoring;
+
+				assert.deepStrictEqual({
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+					objectUrls: protocolMainService.objectUrls.length,
+					owners: ownershipCoordinator.snapshot(),
+					retained: retainedStatus(controller),
+				}, {
+					instances: [],
+					views: 0,
+					objectUrls: 0,
+					owners: [],
+					retained: [{ desiredState: 'unloaded', folderStatus: 'missing' }],
+				});
+			});
+
+		test('shutdown during an attach stat prevents reservation and view',
+			async () => {
+				const alpha = createWorktree('shutdown-during-stat');
+				const heldStat = new HeldStat();
+				heldStat.hold(alpha);
+				let ownershipChanges = 0;
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator({
+						onDidChange: () => ownershipChanges++,
+					});
+				const { controller, protocolMainService, viewFactory } =
+					createController({ ownershipCoordinator, stat: heldStat.stat });
+
+				const open = controller.retainAndOpenAdmittedWorkbench(
+					URI.file(alpha)
+				);
+				const statCall = await heldStat.next(alpha);
+				const shutdown = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+				statCall.release();
+				await open;
+				await shutdown;
+
+				assert.deepStrictEqual({
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+					objectUrls: protocolMainService.objectUrls.length,
+					owners: ownershipCoordinator.snapshot(),
+					ownershipChanges,
+					retained: retainedStatus(controller),
+				}, {
+					instances: [],
+					views: 0,
+					objectUrls: 0,
+					owners: [],
+					ownershipChanges: 0,
+					// Shutdown arrived before admission, so the open never
+					// applied and the record keeps its pre-open state.
+					retained: [{ desiredState: 'unloaded', folderStatus: undefined }],
+				});
+			});
+
+		test('disposal during an attach stat leaks no reservation or view',
+			async () => {
+				const alpha = createWorktree('dispose-during-stat');
+				const heldStat = new HeldStat();
+				heldStat.hold(alpha);
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, protocolMainService, viewFactory } =
+					createController({ ownershipCoordinator, stat: heldStat.stat });
+
+				const open = controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				const statCall = await heldStat.next(alpha);
+				controller.dispose();
+				statCall.release();
+				await open;
+
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					objectUrls: protocolMainService.objectUrls.length,
+					owners: ownershipCoordinator.snapshot(),
+				}, { views: 0, objectUrls: 0, owners: [] });
+			});
+
+		// Each production stat completes in its own libuv callback, and Node
+		// drains microtasks between callbacks. Releasing the held stats in
+		// separate macrotasks models that; releasing both in one synchronous
+		// call would interleave two admissions in a way production cannot.
+		for (const order of ['first stat first', 'second stat first'] as const) {
+			test(`concurrent opens with held stats create one view and owner (${order})`,
+				async () => {
+					const alpha = createWorktree(`concurrent-held-stats-${order}`);
+					const heldStat = new HeldStat();
+					heldStat.hold(alpha, 2);
+					const ownershipCoordinator =
+						new HucodeDesktopWorkbenchOwnershipCoordinator();
+					const { controller, viewFactory } = createController({
+						ownershipCoordinator,
+						stat: heldStat.stat,
+					});
+
+					const first = controller.openAdmittedWorkspace(
+						alpha,
+						'project-alpha'
+					);
+					const firstStat = await heldStat.next(alpha);
+					const second = controller.openAdmittedWorkspace(
+						alpha,
+						'project-alpha'
+					);
+					const secondStat = await heldStat.next(alpha);
+					const [early, late] = order === 'first stat first'
+						? [firstStat, secondStat]
+						: [secondStat, firstStat];
+					early.release();
+					await timeout(0);
+					late.release();
+					await Promise.all([first, second]);
+
+					const owners = ownershipCoordinator.snapshot();
+					assert.deepStrictEqual({
+						views: viewFactory.views.length,
+						instances: controller.getState().instances.map(
+							instance => instance.instanceId
+						),
+						owners: owners.map(ownership => ownership.owner),
+						...activation(controller, viewFactory),
+					}, {
+						views: 1,
+						instances: ['instance-1'],
+						owners: [{
+							kind: 'hosted',
+							windowId: 1,
+							instanceId: 'instance-1',
+						}],
+						activeInstanceId: 'instance-1',
+						visible: [true],
+						viewShown: [true],
+					});
+				});
+		}
+
+		test('a late missing stat from an overlapping open keeps the live view',
+			async () => {
+				const alpha = createWorktree('overlapping-missing-stat');
+				const heldStat = new HeldStat();
+				heldStat.hold(alpha, 2);
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					ownershipCoordinator,
+					stat: heldStat.stat,
+				});
+
+				const first = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const firstStat = await heldStat.next(alpha);
+				const second = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const secondStat = await heldStat.next(alpha);
+				firstStat.release();
+				await first;
+				assert.strictEqual(viewFactory.views.length, 1);
+				secondStat.fail('ENOENT');
+				await second;
+
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					closeCalls: viewFactory.views[0].rawWebContents
+						.closeCalls.length,
+					instances: controller.getState().instances.map(
+						instance => instance.instanceId
+					),
+					owners: ownershipCoordinator.snapshot().map(
+						ownership => ownership.owner.kind === 'hosted' &&
+							ownership.owner.instanceId
+					),
+					...activation(controller, viewFactory),
+				}, {
+					views: 1,
+					closeCalls: 0,
+					instances: ['instance-1'],
+					owners: ['instance-1'],
+					activeInstanceId: 'instance-1',
+					visible: [true],
+					viewShown: [true],
+				});
+			});
+
+		test('an overlapping open released after the first attaches activates it',
+			async () => {
+				const previous = createWorktree('overlap-after-attach-previous');
+				const alpha = createWorktree('overlap-after-attach');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+				await controller.openAdmittedWorkspace(previous, 'project-previous');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(alpha, 2);
+
+				const first = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const firstStat = await heldStat.next(alpha);
+				const second = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const secondStat = await heldStat.next(alpha);
+				firstStat.release();
+				await first;
+				secondStat.release();
+				await second;
+
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					instances: controller.getState().instances.map(
+						instance => instance.instanceId
+					),
+					...activation(controller, viewFactory),
+				}, {
+					views: 2,
+					instances: ['instance-2', 'instance-1'],
+					activeInstanceId: 'instance-2',
+					visible: [true, false],
+					viewShown: [false, true],
+				});
+			});
+
+		/**
+		 * Starts a navigation from the active alpha workbench to `target` and
+		 * waits until its attach has created the target's view.
+		 */
+		async function startNavigationAttach(
+			controller: ResidentHostedWorkspacesController,
+			viewFactory: TestHostedWorkbenchViewFactory,
+			heldStat: HeldStat,
+			target: string
+		) {
+			const binding = controller.acquireHostedShellBinding(1)!;
+			const navigation = controller.navigateHostedShellToFolder(
+				binding,
+				{ folderUri: URI.file(target).toJSON() },
+				{
+					isCurrentAndActiveVisible: async () =>
+						controller.getState().activeInstanceId ===
+						binding.instanceId,
+				}
+			);
+			const navigationStat = await heldStat.next(target);
+			return { navigation, navigationStat };
+		}
+
+		async function waitForViews(
+			viewFactory: TestHostedWorkbenchViewFactory,
+			count: number
+		): Promise<void> {
+			for (let attempt = 0; attempt < 100 &&
+				viewFactory.views.length < count; attempt++) {
+				await timeout(0);
+			}
+			assert.strictEqual(viewFactory.views.length, count);
+		}
+
+		function ownershipOf(
+			coordinator: HucodeDesktopWorkbenchOwnershipCoordinator,
+			path: string
+		) {
+			const lookup = coordinator.lookup(resolvedPath(path));
+			return lookup.kind === 'current-owner'
+				? {
+					phase: lookup.ownership.phase,
+					owner: lookup.ownership.owner,
+				}
+				: undefined;
+		}
+
+		for (const join of ['stat join', 'existing-live open'] as const) {
+			test(`an open joining a navigation's attach (${join}) publishes ownership`,
+				async () => {
+					const alpha = createWorktree(`nav-join-alpha-${join}`);
+					const target = createWorktree(`nav-join-target-${join}`);
+					const heldLoad = new DeferredPromise<void>();
+					const heldStat = new HeldStat();
+					const ownershipCoordinator =
+						new HucodeDesktopWorkbenchOwnershipCoordinator();
+					const { controller, viewFactory } = createController({
+						ownershipCoordinator,
+						stat: heldStat.stat,
+						loadUrlPromises: [Promise.resolve(), heldLoad.p],
+					});
+					await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+					controller.notifyHostedWorkspaceReady('instance-1');
+					heldStat.hold(target, join === 'stat join' ? 2 : 1);
+
+					const { navigation, navigationStat } =
+						await startNavigationAttach(
+							controller,
+							viewFactory,
+							heldStat,
+							target
+						);
+					let sidebarOpen: Promise<void>;
+					if (join === 'stat join') {
+						sidebarOpen = controller.openAdmittedWorkspace(target);
+						const sidebarStat = await heldStat.next(target);
+						navigationStat.release();
+						await waitForViews(viewFactory, 2);
+						sidebarStat.release();
+					} else {
+						navigationStat.release();
+						await waitForViews(viewFactory, 2);
+						sidebarOpen = controller.openAdmittedWorkspace(target);
+					}
+					await sidebarOpen;
+					const targetInstanceId = controller.getState().instances.find(
+						instance => instance.worktreePath === target
+					)?.instanceId;
+					assert.ok(targetInstanceId);
+					assert.strictEqual(
+						controller.getState().activeInstanceId,
+						targetInstanceId
+					);
+					heldLoad.complete();
+					await navigation;
+
+					assert.deepStrictEqual({
+						activeInstanceId: controller.getState().activeInstanceId,
+						ownership: ownershipOf(ownershipCoordinator, target),
+						// Another window's admission must be routed to the live
+						// owner instead of waiting on an unresolved reservation.
+						laterAdmission: ownershipCoordinator.reserve(
+							resolvedPath(target),
+							{ kind: 'regular', windowId: 42 }
+						).kind,
+					}, {
+						activeInstanceId: targetInstanceId,
+						ownership: {
+							phase: 'live',
+							owner: {
+								kind: 'hosted',
+								windowId: 1,
+								instanceId: targetInstanceId,
+							},
+						},
+						laterAdmission: 'current-owner',
+					});
+				});
+		}
+
+		test('a transfer during an adopted navigation attach still transfers',
+			async () => {
+				const alpha = createWorktree('nav-join-transfer-alpha');
+				const target = createWorktree('nav-join-transfer-target');
+				const heldLoad = new DeferredPromise<void>();
+				const heldStat = new HeldStat();
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					ownershipCoordinator,
+					stat: heldStat.stat,
+					loadUrlPromises: [Promise.resolve(), heldLoad.p],
+				});
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(target);
+
+				const { navigation, navigationStat } = await startNavigationAttach(
+					controller,
+					viewFactory,
+					heldStat,
+					target
+				);
+				navigationStat.release();
+				await waitForViews(viewFactory, 2);
+				await controller.openAdmittedWorkspace(target);
+				const adopted = ownershipCoordinator.lookup(resolvedPath(target));
+				assert.ok(adopted.kind === 'current-owner' &&
+					adopted.ownership.phase === 'reserved');
+				const targetInstanceId = adopted.ownership.owner.kind === 'hosted'
+					? adopted.ownership.owner.instanceId
+					: undefined;
+				assert.ok(targetInstanceId);
+
+				// Another window's admission waits on the reservation and, once
+				// it settles, routes to a hosted owner the way routeWorkspaceOpen
+				// does.
+				const waiting = ownershipCoordinator.reserve(
+					resolvedPath(target),
+					{ kind: 'regular', windowId: 42 }
+				);
+				assert.strictEqual(waiting.kind, 'reserved-conflict');
+				let rerouted: Promise<void> | undefined;
+				if (waiting.kind === 'reserved-conflict') {
+					void waiting.settled.then(() => {
+						const current = ownershipCoordinator.lookup(resolvedPath(target));
+						if (current.kind === 'current-owner' &&
+							current.ownership.owner.kind === 'hosted' &&
+							current.ownership.owner.windowId === 1) {
+							rerouted = controller.openAdmittedWorkspace(target);
+						}
+					});
+				}
+
+				const transfer = transferHucodeDesktopWorkbenchToRegularWindow({
+					coordinator: ownershipCoordinator,
+					ownership: adopted.ownership,
+					closeHostedOwner: () => controller.closeWorkspace(
+						targetInstanceId
+					),
+					openRegularWindow: async () => 7,
+					recoverHostedOwner: async () => ({ kind: 'failed' }),
+				});
+				assert.strictEqual(
+					ownershipOf(ownershipCoordinator, target)?.phase,
+					'transferring'
+				);
+				heldLoad.complete();
+				const outcome = await transfer;
+				await navigation;
+				await rerouted;
+
+				assert.deepStrictEqual({
+					outcome: outcome.kind,
+					ownership: ownershipOf(ownershipCoordinator, target),
+					hostedTarget: controller.getState().instances.some(
+						instance => instance.worktreePath === target
+					),
+				}, {
+					outcome: 'transferred',
+					ownership: {
+						phase: 'live',
+						owner: { kind: 'regular', windowId: 7 },
+					},
+					hostedTarget: false,
+				});
+			});
+
+		test('an adopted navigation attach that crashed is not published live',
+			async () => {
+				const alpha = createWorktree('nav-join-crash-alpha');
+				const target = createWorktree('nav-join-crash-target');
+				const heldLoad = new DeferredPromise<void>();
+				const heldStat = new HeldStat();
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					ownershipCoordinator,
+					stat: heldStat.stat,
+					loadUrlPromises: [Promise.resolve(), heldLoad.p],
+				});
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(target);
+
+				const { navigation, navigationStat } = await startNavigationAttach(
+					controller,
+					viewFactory,
+					heldStat,
+					target
+				);
+				navigationStat.release();
+				await waitForViews(viewFactory, 2);
+				await controller.openAdmittedWorkspace(target);
+				viewFactory.views[1].rawWebContents.emit('render-process-gone');
+				heldLoad.complete();
+				await navigation;
+
+				assert.deepStrictEqual({
+					state: controller.getState().instances.find(instance =>
+						instance.worktreePath === target)?.state,
+					phase: ownershipOf(ownershipCoordinator, target)?.phase,
+				}, { state: 'crashed', phase: 'recovering' });
+			});
+
+		for (const order of ['target first', 'alias first'] as const) {
+			test(`overlapping opens through symlink aliases join one active view (${order})`,
+				async () => {
+					const real = createWorktree(`overlap-alias-real-${order}`);
+					const alias = join(tempRoot, `overlap-alias-link-${order}`);
+					symlinkSync(real, alias, 'dir');
+					const heldStat = new HeldStat();
+					heldStat.hold(real);
+					heldStat.hold(alias);
+					const ownershipCoordinator =
+						new HucodeDesktopWorkbenchOwnershipCoordinator();
+					const { controller, viewFactory } = createController({
+						ownershipCoordinator,
+						stat: heldStat.stat,
+					});
+
+					const first = controller.openAdmittedWorkspace(real);
+					const realStat = await heldStat.next(real);
+					const second = controller.openAdmittedWorkspace(alias);
+					const aliasStat = await heldStat.next(alias);
+					// Separate macrotasks model separate stat callbacks.
+					const [early, late, openedPath] = order === 'target first'
+						? [realStat, aliasStat, real]
+						: [aliasStat, realStat, alias];
+					early.release();
+					await timeout(0);
+					late.release();
+					await Promise.all([first, second]);
+
+					const state = controller.getState();
+					const owners = ownershipCoordinator.snapshot();
+					assert.deepStrictEqual({
+						views: viewFactory.views.length,
+						instancePaths: state.instances.map(
+							instance => instance.worktreePath
+						),
+						activeIsTheInstance: state.activeInstanceId ===
+							state.instances[0]?.instanceId,
+						owners: owners.map(ownership =>
+							ownership.owner.kind === 'hosted' &&
+							ownership.owner.instanceId === state.instances[0]?.instanceId
+						),
+						retainedPaths: state.retainedWorkbenches?.map(record =>
+							URI.revive(record.folderUri).fsPath
+						),
+						retainedStates: retainedStatus(controller),
+						viewShown: viewFactory.views.map(view =>
+							view.visibleCalls.at(-1)
+						),
+					}, {
+						views: 1,
+						instancePaths: [openedPath],
+						activeIsTheInstance: true,
+						owners: [true],
+						retainedPaths: [openedPath],
+						retainedStates: [
+							{ desiredState: 'loaded', folderStatus: undefined },
+						],
+						viewShown: [true],
+					});
+				});
+		}
+
+		test('simultaneous opens of a retained workbench keep it loaded and active',
+			async () => {
+				const scratch = createWorktree('overlap-retained');
+				const heldStat = new HeldStat();
+				heldStat.hold(scratch, 2);
+				const { controller, viewFactory } = createController({
+					ids: ['record', 'instance-1', 'instance-2'],
+					stat: heldStat.stat,
+				});
+				controller.retainWorkbench(URI.file(scratch));
+
+				const first = controller.openAdmittedWorkspace(scratch);
+				const firstStat = await heldStat.next(scratch);
+				const second = controller.openAdmittedWorkspace(scratch);
+				const secondStat = await heldStat.next(scratch);
+				firstStat.release();
+				await timeout(0);
+				secondStat.release();
+				await Promise.all([first, second]);
+
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					retained: retainedStatus(controller),
+					...activation(controller, viewFactory),
+				}, {
+					views: 1,
+					retained: [{ desiredState: 'loaded', folderStatus: undefined }],
+					activeInstanceId: 'instance-1',
+					visible: [true],
+					viewShown: [true],
+				});
+			});
+
+		test('crash probe records a missing folder', async () => {
+			const scratch = createWorktree('crash-probe-missing');
+			const heldStat = new HeldStat();
+			const { controller, viewFactory } = createController({
+				ids: ['record', 'instance-1', 'instance-2'],
+				stat: heldStat.stat,
+			});
+
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
+			controller.notifyHostedWorkspaceReady('instance-1');
+			heldStat.hold(scratch);
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+			const probe = await heldStat.next(scratch);
+			assert.deepStrictEqual(retainedStatus(controller), [
+				{ desiredState: 'unloaded', folderStatus: undefined },
+			]);
+			rmSync(scratch, { recursive: true, force: true });
+			probe.release();
+			await drainMicrotasks();
+
+			assert.deepStrictEqual(retainedStatus(controller), [
+				{ desiredState: 'unloaded', folderStatus: 'missing' },
+			]);
+		});
+
+		test('stale crash probe cannot mark a reopened folder missing',
+			async () => {
+				const scratch = createWorktree('crash-probe-reopened');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					ids: ['record', 'instance-1', 'instance-2'],
+					stat: heldStat.stat,
+				});
+
+				await controller.retainAndOpenAdmittedWorkbench(
+					URI.file(scratch)
+				);
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(scratch);
+				viewFactory.views[0].rawWebContents.emit('render-process-gone');
+				const probe = await heldStat.next(scratch);
+				rmSync(scratch, { recursive: true, force: true });
+				mkdirSync(scratch, { recursive: true });
+				await controller.openAdmittedWorkspace(scratch);
+				controller.notifyHostedWorkspaceReady('instance-2');
+				probe.fail('ENOENT');
+				await drainMicrotasks();
+
+				assert.deepStrictEqual({
+					instances: controller.getState().instances.map(instance => ({
+						instanceId: instance.instanceId,
+						state: instance.state,
+					})),
+					retained: retainedStatus(controller),
+				}, {
+					instances: [{ instanceId: 'instance-2', state: 'active' }],
+					retained: [{ desiredState: 'loaded', folderStatus: undefined }],
+				});
+			});
+
+		test('stale crash probe cannot mark a reopened and closed folder missing',
+			async () => {
+				const scratch = createWorktree('crash-probe-reopened-closed');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					ids: ['record', 'instance-1', 'instance-2'],
+					stat: heldStat.stat,
+				});
+
+				await controller.retainAndOpenAdmittedWorkbench(
+					URI.file(scratch)
+				);
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(scratch);
+				viewFactory.views[0].rawWebContents.emit('render-process-gone');
+				const probe = await heldStat.next(scratch);
+				await controller.openAdmittedWorkspace(scratch);
+				controller.notifyHostedWorkspaceReady('instance-2');
+				assert.strictEqual(await controller.closeWorkspace(), true);
+				probe.fail('ENOENT');
+				await drainMicrotasks();
+
+				assert.deepStrictEqual(retainedStatus(controller), [
+					{ desiredState: 'unloaded', folderStatus: undefined },
+				]);
+			});
+
+		test('crash probe settling after dismissal is a no-op', async () => {
+			const scratch = createWorktree('crash-probe-dismissed');
+			const heldStat = new HeldStat();
+			const { controller, stateChanges, viewFactory } = createController({
+				ids: ['record', 'instance-1'],
+				stat: heldStat.stat,
+			});
+
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
+			controller.notifyHostedWorkspaceReady('instance-1');
+			heldStat.hold(scratch);
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+			const probe = await heldStat.next(scratch);
+			const workbenchId = controller.getState().retainedWorkbenches![0].id;
+			await controller.dismissRetainedWorkbench(workbenchId);
+			assert.deepStrictEqual(controller.getState().retainedWorkbenches, []);
+			const stateChangeCount = stateChanges.length;
+			probe.fail('ENOENT');
+			await drainMicrotasks();
+
+			assert.deepStrictEqual({
+				retained: controller.getState().retainedWorkbenches,
+				stateChanges: stateChanges.length,
+			}, { retained: [], stateChanges: stateChangeCount });
+		});
+
+		test('hosted self reload abandons a refresh after navigation',
+			async () => {
+				const alpha = createWorktree('self-reload-navigation');
+				const defaultProfile = createProfile('default', [], true);
+				const firstProfile = createProfile('first', [URI.file(alpha)]);
+				const secondProfile = createProfile('second');
+				const heldStat = new HeldStat();
+				const {
+					controller,
+					protocolMainService,
+					viewFactory,
+					workspaceProfileOverrides,
+				} = createController({
+					profiles: [defaultProfile, firstProfile, secondProfile],
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				const binding = controller.acquireHostedShellBinding(1)!;
+				heldStat.hold(alpha);
+				const reloading = controller.reloadHostedShellSelf(binding);
+				const statCall = await heldStat.next(alpha);
+				viewFactory.views[0].rawWebContents.startNavigation(false, true);
+				workspaceProfileOverrides.set(
+					URI.file(alpha).toString(),
+					secondProfile
+				);
+				statCall.release();
+
+				assert.deepStrictEqual({
+					reloaded: await reloading,
+					reloadCalls: viewFactory.views[0].rawWebContents
+						.reloadCalls.length,
+					profile: (protocolMainService.objectUrls[0]
+						.value as INativeWindowConfiguration).profiles.profile.id,
+				}, { reloaded: false, reloadCalls: 0, profile: 'first' });
+			});
+
+		test('workspace reload abandons a refresh after a renderer crash',
+			async () => {
+				const alpha = createWorktree('reload-crash');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(alpha);
+				const reloading = controller.reloadWorkspace();
+				const statCall = await heldStat.next(alpha);
+				viewFactory.views[0].rawWebContents.emit('render-process-gone');
+				statCall.release();
+				await reloading;
+
+				assert.deepStrictEqual({
+					reloadCalls: viewFactory.views[0].rawWebContents
+						.reloadCalls.length,
+					state: controller.getState().instances[0].state,
+				}, { reloadCalls: 0, state: 'crashed' });
+			});
+
+		test('concurrent interrupted-unload reloads reload once', async () => {
+			const alpha = createWorktree('alpha-concurrent-interrupted');
+			const bravo = createWorktree('bravo-concurrent-interrupted');
+			const heldStat = new HeldStat();
+			const { controller, ipcMain, viewFactory } = createController({
+				beforeUnloadTimeoutMs: 5,
+				stat: heldStat.stat,
+			});
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			const hostedWebContents = viewFactory.views[0].rawWebContents;
+			hostedWebContents.autoBeforeUnloadReply = false;
+			hostedWebContents.autoPreparationRollbackReply = false;
+
+			const closings = [
+				controller.closeWorkspace('instance-1'),
+				controller.closeWorkspace('instance-1'),
+			];
+			for (let attempt = 0; attempt < 100 &&
+				hostedWebContents.sent.length < 2; attempt++) {
+				await timeout(0);
+			}
+			const beforeUnloads = hostedWebContents.sent.map(
+				item => item.request as { okChannel: string }
+			);
+			assert.strictEqual(beforeUnloads.length, 2);
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			heldStat.hold(alpha);
+			for (const beforeUnload of beforeUnloads) {
+				ipcMain.emitReply(beforeUnload.okChannel);
+			}
+			const statCall = await heldStat.next(alpha);
+			assert.strictEqual(await Promise.race(closings), false);
+			statCall.release();
+			assert.deepStrictEqual(await Promise.all(closings), [false, false]);
+
+			assert.deepStrictEqual({
+				reloadCalls: hostedWebContents.reloadCalls.length,
+				state: controller.getState().instances.find(instance =>
+					instance.instanceId === 'instance-1'
+				)?.state,
+			}, { reloadCalls: 1, state: 'loading' });
+		});
+
+		test('workspace reload abandons a refresh after a document navigation',
+			async () => {
+				const alpha = createWorktree('reload-navigation');
+				const defaultProfile = createProfile('default', [], true);
+				const firstProfile = createProfile('first', [URI.file(alpha)]);
+				const secondProfile = createProfile('second');
+				const heldStat = new HeldStat();
+				const {
+					controller,
+					protocolMainService,
+					viewFactory,
+					workspaceProfileOverrides,
+				} = createController({
+					profiles: [defaultProfile, firstProfile, secondProfile],
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(alpha);
+				const reloading = controller.reloadWorkspace();
+				const statCall = await heldStat.next(alpha);
+				viewFactory.views[0].rawWebContents.startNavigation(false, true);
+				workspaceProfileOverrides.set(
+					URI.file(alpha).toString(),
+					secondProfile
+				);
+				statCall.release();
+				await reloading;
+
+				assert.deepStrictEqual({
+					reloadCalls: viewFactory.views[0].rawWebContents
+						.reloadCalls.length,
+					profile: (protocolMainService.objectUrls[0]
+						.value as INativeWindowConfiguration).profiles.profile.id,
+				}, { reloadCalls: 0, profile: 'first' });
+			});
+
+		test('interrupted-unload reload abandons a refresh after a document navigation and can retry',
+			async () => {
+				const alpha = createWorktree('interrupted-navigation');
+				const heldStat = new HeldStat();
+				const { controller, ipcMain, viewFactory } = createController({
+					beforeUnloadTimeoutMs: 5,
+					stat: heldStat.stat,
+				});
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				const hostedWebContents = viewFactory.views[0].rawWebContents;
+				hostedWebContents.autoBeforeUnloadReply = false;
+				hostedWebContents.autoPreparationRollbackReply = false;
+				// A self-close superseded by a new connection, not by a
+				// reactivation, needs a reload in the same lifecycle generation.
+				const interruptSelfClose = async () => {
+					const binding = controller.acquireHostedShellBinding(1)!;
+					const sentBefore = hostedWebContents.sent.length;
+					const closing = controller.closeHostedShellSelf(binding);
+					for (let attempt = 0; attempt < 100 &&
+						hostedWebContents.sent.length <= sentBefore; attempt++) {
+						await timeout(0);
+					}
+					const beforeUnload = hostedWebContents.sent[sentBefore]
+						.request as { okChannel: string };
+					controller.acquireHostedShellBinding(1);
+					ipcMain.emitReply(beforeUnload.okChannel);
+					return closing;
+				};
+
+				heldStat.hold(alpha);
+				const firstClose = interruptSelfClose();
+				const statCall = await heldStat.next(alpha);
+				hostedWebContents.startNavigation(false, true);
+				statCall.release();
+				const abandoned = {
+					closed: await firstClose,
+					reloadCalls: hostedWebContents.reloadCalls.length,
+				};
+				const retried = {
+					closed: await interruptSelfClose(),
+					reloadCalls: hostedWebContents.reloadCalls.length,
+				};
+
+				assert.deepStrictEqual({ abandoned, retried }, {
+					abandoned: { closed: false, reloadCalls: 0 },
+					// The abandoned refresh reset its claim, so a later
+					// interruption in the same generation reloads.
+					retried: { closed: false, reloadCalls: 1 },
+				});
+			});
+
+		test('workspace reload survives a same-document shell reconnection',
+			async () => {
+				const alpha = createWorktree('reload-reconnection');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				const binding = controller.acquireHostedShellBinding(1)!;
+				heldStat.hold(alpha);
+				const reloading = controller.reloadWorkspace();
+				const statCall = await heldStat.next(alpha);
+				// The same document drops and re-acquires its shell port.
+				controller.releaseHostedShellBinding(binding);
+				controller.acquireHostedShellBinding(1);
+				statCall.release();
+				await reloading;
+
+				assert.strictEqual(
+					viewFactory.views[0].rawWebContents.reloadCalls.length,
+					1
+				);
+			});
+
+		test('workspace reload survives a reactivation of the same workbench',
+			async () => {
+				const alpha = createWorktree('reload-reactivation');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(alpha);
+				const reloading = controller.reloadWorkspace();
+				const statCall = await heldStat.next(alpha);
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				statCall.release();
+				await reloading;
+
+				assert.strictEqual(
+					viewFactory.views[0].rawWebContents.reloadCalls.length,
+					1
+				);
+			});
+
+		test('hosted self reload survives a reactivation of the same workbench',
+			async () => {
+				const alpha = createWorktree('self-reload-reactivation');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				const binding = controller.acquireHostedShellBinding(1)!;
+				heldStat.hold(alpha);
+				const reloading = controller.reloadHostedShellSelf(binding);
+				const statCall = await heldStat.next(alpha);
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				statCall.release();
+
+				assert.deepStrictEqual({
+					reloaded: await reloading,
+					reloadCalls: viewFactory.views[0].rawWebContents
+						.reloadCalls.length,
+				}, { reloaded: true, reloadCalls: 1 });
+			});
+
+		test('active profile query uses the attach-time workspace identity',
+			async () => {
+				const alpha = createWorktree('profile-after-delete');
+				const defaultProfile = createProfile('default', [], true);
+				const firstProfile = createProfile('first', [URI.file(alpha)]);
+				const { controller } = createController({
+					profiles: [defaultProfile, firstProfile],
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				rmSync(alpha, { recursive: true, force: true });
+
+				assert.strictEqual(
+					controller.getActiveWorkspaceProfile()?.id,
+					'first'
+				);
+			});
+
+		test('active profile query is undefined before a restore attaches',
+			async () => {
+				const scratch = createWorktree('profile-restore-pending');
+				const defaultProfile = createProfile('default', [], true);
+				const firstProfile = createProfile('first', [URI.file(scratch)]);
+				const heldStat = new HeldStat();
+				heldStat.hold(scratch);
+				const { controller } = createController({
+					activeWorktreePath: scratch,
+					retainedWorkbenches: [retainedRecord('pending', scratch)],
+					profiles: [defaultProfile, firstProfile],
+					stat: heldStat.stat,
+				});
+
+				const restoring = controller.ensureRestored();
+				const statCall = await heldStat.next(scratch);
+				const pending = {
+					activeState: controller.getState().instances.find(
+						instance => instance.instanceId ===
+							controller.getState().activeInstanceId
+					)?.state,
+					profile: controller.getActiveWorkspaceProfile()?.id,
+				};
+				statCall.release();
+				await restoring;
+
+				assert.deepStrictEqual({
+					pending,
+					attachedProfile: controller.getActiveWorkspaceProfile()?.id,
+				}, {
+					pending: { activeState: 'restore-pending', profile: undefined },
+					attachedProfile: 'first',
+				});
+			});
+	});
+	suite('asynchronous ownership paths', () => {
+		test('disposal during restore path resolution leaves no reservations',
+			async () => {
+				const alpha = createWorktree('restore-resolution-dispose-alpha');
+				const bravo = createWorktree('restore-resolution-dispose-bravo');
+				const resolutionGate = new DeferredPromise<void>();
+				const resolutionCalls: string[] = [];
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					restoreEntries: [
+						{ worktreePath: alpha, projectId: 'project-alpha' },
+						{ worktreePath: bravo, projectId: 'project-bravo' },
+					],
+					activeWorktreePath: alpha,
+					restorePolicy: 'all',
+					ownershipCoordinator,
+					resolvePath: async path => {
+						resolutionCalls.push(path);
+						await resolutionGate.p;
+						return resolvedPath(path);
+					},
+				});
+
+				const restoring = controller.ensureRestored();
+				for (let attempt = 0; attempt < 100 &&
+					resolutionCalls.length < 2; attempt++) {
+					await timeout(0);
+				}
+				assert.deepStrictEqual(resolutionCalls.toSorted(), [alpha, bravo]);
+				controller.dispose();
+				resolutionGate.complete();
+				await restoring;
+
+				assert.deepStrictEqual({
+					owners: ownershipCoordinator.snapshot(),
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+				}, { owners: [], instances: [], views: 0 });
+			});
+
+		/** Holds every restore path resolution until the test releases them. */
+		function createHeldRestoreResolution() {
+			const gate = new DeferredPromise<void>();
+			const calls: string[] = [];
+			return {
+				calls,
+				release: () => gate.complete(),
+				resolvePath: async (path: string) => {
+					calls.push(path);
+					await gate.p;
+					return resolvedPath(path);
+				},
+				async started(count: number): Promise<void> {
+					for (let attempt = 0; attempt < 100 &&
+						calls.length < count; attempt++) {
+						await timeout(0);
+					}
+					assert.strictEqual(calls.length, count);
+				},
+			};
+		}
+
+		function catalogWith(
+			workbenches: readonly { readonly id: string; readonly path: string }[]
+		): ProjectCatalogSnapshot {
+			return {
+				epoch: 'test',
+				revision: 1,
+				projects: [],
+				workbenches: workbenches.map((workbench, order) => ({
+					id: workbench.id,
+					folderUri: URI.file(workbench.path),
+					order,
+				})),
+			};
+		}
+
+		test('a catalog remap during restore resolution still unloads a losing record',
+			async () => {
+				const scratch = createWorktree('restore-remap-loser');
+				const resolution = createHeldRestoreResolution();
+				const { controller, viewFactory } = createController({
+					activeWorktreePath: scratch,
+					retainedWorkbenches: [{
+						id: 'local',
+						folderUri: URI.file(scratch).toJSON(),
+						desiredState: 'loaded',
+						order: 0,
+					}],
+					shouldRestoreCandidate: () => false,
+					resolvePath: resolution.resolvePath,
+				});
+
+				const restoring = controller.ensureRestored();
+				await resolution.started(1);
+				controller.synchronizeGlobalWorkbenchCatalog(
+					catalogWith([{ id: 'global', path: scratch }])
+				);
+				resolution.release();
+				await restoring;
+
+				assert.deepStrictEqual({
+					retained: controller.getState().retainedWorkbenches?.map(
+						record => ({
+							id: record.id,
+							desiredState: record.desiredState,
+						})
+					),
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+				}, {
+					retained: [{ id: 'global', desiredState: 'unloaded' }],
+					instances: [],
+					views: 0,
+				});
+			});
+
+		test('a catalog drop during restore resolution restores no orphan instance',
+			async () => {
+				const scratch = createWorktree('restore-drop');
+				const resolution = createHeldRestoreResolution();
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					activeWorktreePath: scratch,
+					retainedWorkbenches: [{
+						id: 'local',
+						folderUri: URI.file(scratch).toJSON(),
+						desiredState: 'loaded',
+						order: 0,
+					}],
+					ownershipCoordinator,
+					resolvePath: resolution.resolvePath,
+				});
+
+				const restoring = controller.ensureRestored();
+				await resolution.started(1);
+				controller.synchronizeGlobalWorkbenchCatalog(catalogWith([]));
+				resolution.release();
+				await restoring;
+
+				assert.deepStrictEqual({
+					retained: controller.getState().retainedWorkbenches,
+					instances: controller.getState().instances,
+					owners: ownershipCoordinator.snapshot(),
+					views: viewFactory.views.length,
+				}, { retained: [], instances: [], owners: [], views: 0 });
+			});
+
+		test('disposal during restore candidate selection leaves no reservations',
+			async () => {
+				const alpha = createWorktree('restore-selection-dispose-alpha');
+				const bravo = createWorktree('restore-selection-dispose-bravo');
+				const selectionGate = new DeferredPromise<void>();
+				let selecting = false;
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					restoreEntries: [
+						{ worktreePath: alpha, projectId: 'project-alpha' },
+						{ worktreePath: bravo, projectId: 'project-bravo' },
+					],
+					activeWorktreePath: alpha,
+					restorePolicy: 'all',
+					ownershipCoordinator,
+					selectRestoreCandidates: async candidates => {
+						selecting = true;
+						await selectionGate.p;
+						return candidates.map(() => true);
+					},
+				});
+
+				const restoring = controller.ensureRestored();
+				for (let attempt = 0; attempt < 100 && !selecting; attempt++) {
+					await timeout(0);
+				}
+				assert.strictEqual(selecting, true);
+				controller.dispose();
+				selectionGate.complete();
+				await restoring;
+
+				assert.deepStrictEqual({
+					owners: ownershipCoordinator.snapshot(),
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+				}, { owners: [], instances: [], views: 0 });
+			});
+
+		test('selective restore maps decisions across retained and project candidates',
+			async () => {
+				const retainedKept = createWorktree('mixed-retained-kept');
+				const retainedLost = createWorktree('mixed-retained-lost');
+				const projectKept = createWorktree('mixed-project-kept');
+				const projectLost = createWorktree('mixed-project-lost');
+				const kept = new Set([retainedKept, projectKept]);
+				const { controller } = createController({
+					restoreEntries: [
+						{ worktreePath: projectLost, projectId: 'project-lost' },
+						{ worktreePath: projectKept, projectId: 'project-kept' },
+					],
+					// Retained decisions [kept, lost] and project decisions
+					// [lost, kept] differ, so an offset error changes the result.
+					retainedWorkbenches: [{
+						id: 'retained-kept',
+						folderUri: URI.file(retainedKept).toJSON(),
+						desiredState: 'loaded',
+						order: 0,
+					}, {
+						id: 'retained-lost',
+						folderUri: URI.file(retainedLost).toJSON(),
+						desiredState: 'loaded',
+						order: 1,
+					}],
+					activeWorktreePath: projectKept,
+					restorePolicy: 'all',
+					shouldRestoreCandidate: candidate => kept.has(candidate.path),
+				});
+
+				await controller.ensureRestored();
+
+				assert.deepStrictEqual({
+					instances: controller.getState().instances
+						.map(instance => instance.worktreePath)
+						.toSorted(),
+					retained: controller.getState().retainedWorkbenches?.map(
+						record => [record.id, record.desiredState]
+					),
+				}, {
+					instances: [projectKept, retainedKept].toSorted(),
+					retained: [
+						['retained-kept', 'loaded'],
+						['retained-lost', 'unloaded'],
+					],
+				});
+			});
+
+		test('suspend hands ownership from release to seed without an await',
+			async () => {
+				const alpha = createWorktree('suspend-handoff');
+				let watchRelease = false;
+				let intrusion:
+					| ReturnType<HucodeDesktopWorkbenchOwnershipCoordinator['reserve']>
+					| undefined;
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator({
+						onDidChange: () => {
+							if (watchRelease &&
+								ownershipCoordinator.lookup(
+									resolvedPath(alpha)
+								).kind === 'absent') {
+								watchRelease = false;
+								// Another admission arriving on the next
+								// microtask after the release.
+								queueMicrotask(() => {
+									intrusion = ownershipCoordinator.reserve(
+										resolvedPath(alpha),
+										{ kind: 'regular', windowId: 99 }
+									);
+								});
+							}
+						},
+					});
+				const { controller } = createController({ ownershipCoordinator });
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				watchRelease = true;
+				await controller.suspendWorkspace('instance-1');
+				await timeout(0);
+
+				const owner = ownershipCoordinator.lookup(resolvedPath(alpha));
+				assert.deepStrictEqual({
+					intrusion: intrusion?.kind,
+					owner: owner.kind === 'current-owner'
+						? owner.ownership.owner
+						: undefined,
+					state: controller.getState().instances.map(instance => ({
+						instanceId: instance.instanceId,
+						state: instance.state,
+					})),
+				}, {
+					intrusion: 'current-owner',
+					owner: { kind: 'hosted', windowId: 1, instanceId: 'instance-2' },
+					state: [{ instanceId: 'instance-2', state: 'dormant' }],
+				});
+			});
+	});
 });
