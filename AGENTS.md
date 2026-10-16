@@ -200,8 +200,8 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   `testSuites` entries in `build/hucode/upstream-provenance.json`. Adding one
   also changes the exact list asserted in
   `build/lib/test/hucodeUpstreamProvenance.test.ts`, which only
-  `npm run test-build-scripts` checks. Forgetting to add one is still invisible — that gap closes with H1's
-  provenance map, not before.
+  `npm run test-build-scripts` checks. Forgetting to add one is still
+  invisible — that gap closes with H1's provenance map, not before.
 - Runner assignment is not derivable from the layer alone. An explicit `--run`
   argument bypasses the Node runner's layer exclusions, and two Electron-layer
   suites (`hucodeLinuxUpdate.test.ts`, `hucodeOmniFileDialog.test.ts`) run
