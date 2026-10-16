@@ -10,9 +10,13 @@ import { IProjectManagerService } from './projectManager.js';
 /**
  * Creates the desktop main-process channel for the project manager.
  *
- * Catalog snapshots are consumed in-process by the Omni shell main service and
- * have no desktop IPC subscriber, so buffering them until a first listener
- * would retain every snapshot for the lifetime of the app.
+ * `ProxyChannel.fromService` buffers events until their first IPC listener and
+ * replays them only to that listener. No desktop consumer depends on that
+ * replay: renderers fetch initial state through `getProjects` and
+ * `setGitWorktreeTargets`, and the Omni shell main service consumes catalog
+ * changes in-process. Buffering would instead retain every payload for an
+ * event no renderer subscribes to, such as catalog snapshots, or project
+ * changes in a session without an Omni window.
  */
 export function createProjectManagerChannel(
 	service: IProjectManagerService,
@@ -20,7 +24,9 @@ export function createProjectManagerChannel(
 ): IServerChannel {
 	return ProxyChannel.fromService(service, disposables, {
 		unbufferedEvents: [
+			'onDidChangeProjects',
 			'onDidChangeCatalog',
+			'onDidChangeGitWorktreeTargets',
 		] satisfies (keyof IProjectManagerService)[]
 	});
 }

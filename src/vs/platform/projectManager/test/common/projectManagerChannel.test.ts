@@ -38,24 +38,45 @@ suite('ProjectManagerChannel', () => {
 		return { epoch: 'epoch', revision, projects: [], workbenches: [] };
 	}
 
-	test('does not retain catalog snapshots before an IPC listener', () => {
-		const { events, channel } = createFixture();
-		const received: ProjectCatalogSnapshot[] = [];
+	function gitTargets(consumerId: string): GitWorktreeTargetChange {
+		return { consumerId, observations: [] };
+	}
 
+	test('does not retain events before an IPC listener', () => {
+		const { events, channel } = createFixture();
+		const received = {
+			onDidChangeProjects: [] as (readonly ProjectRecord[])[],
+			onDidChangeCatalog: [] as ProjectCatalogSnapshot[],
+			onDidChangeGitWorktreeTargets: [] as GitWorktreeTargetChange[],
+		};
+		const subscribedEvents = () => Object.entries(events).filter(([, emitter]) => emitter.hasListeners()).map(([name]) => name);
+		const liveProjects: readonly ProjectRecord[] = [];
+
+		events.onDidChangeProjects.fire([]);
 		events.onDidChangeCatalog.fire(catalog(1));
-		const subscribedBeforeListening = events.onDidChangeCatalog.hasListeners();
-		const listener = channel.listen<ProjectCatalogSnapshot>('window', 'onDidChangeCatalog')(e => received.push(e));
+		events.onDidChangeGitWorktreeTargets.fire(gitTargets('early'));
+		const subscribedBeforeListening = subscribedEvents();
+		const listeners = new DisposableStore();
+		listeners.add(channel.listen<readonly ProjectRecord[]>('window', 'onDidChangeProjects')(e => received.onDidChangeProjects.push(e)));
+		listeners.add(channel.listen<ProjectCatalogSnapshot>('window', 'onDidChangeCatalog')(e => received.onDidChangeCatalog.push(e)));
+		listeners.add(channel.listen<GitWorktreeTargetChange>('window', 'onDidChangeGitWorktreeTargets')(e => received.onDidChangeGitWorktreeTargets.push(e)));
+		events.onDidChangeProjects.fire(liveProjects);
 		events.onDidChangeCatalog.fire(catalog(2));
-		listener.dispose();
+		events.onDidChangeGitWorktreeTargets.fire(gitTargets('live'));
+		listeners.dispose();
 
 		deepStrictEqual({
 			subscribedBeforeListening,
 			received,
-			subscribedAfterListening: events.onDidChangeCatalog.hasListeners(),
+			subscribedAfterListening: subscribedEvents(),
 		}, {
-			subscribedBeforeListening: false,
-			received: [catalog(2)],
-			subscribedAfterListening: false,
+			subscribedBeforeListening: [],
+			received: {
+				onDidChangeProjects: [liveProjects],
+				onDidChangeCatalog: [catalog(2)],
+				onDidChangeGitWorktreeTargets: [gitTargets('live')],
+			},
+			subscribedAfterListening: [],
 		});
 	});
 });
