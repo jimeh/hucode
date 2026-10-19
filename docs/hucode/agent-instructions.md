@@ -474,8 +474,8 @@ human-facing guides rather than replacing them.
   12 and newer. `npm ci` installs lockfile pins regardless of that gate, but
   `npm pack` resolves through registry metadata and rejects a pin younger than
   three days with `ETARGET`. `build/lib/npmPackage.ts` therefore passes
-  `--min-release-age=0` when it fetches a cross-build package pin that it will
-  verify against a lockfile `sha512` integrity. Without a `sha512` integrity,
+  `--min-release-age=0` when it fetches a package pin that it will verify
+  against a lockfile `sha512` integrity. Without a `sha512` integrity,
   the gate stays in force.
 - For parallel local git worktrees, dependency state is per worktree because
   VS Code's install hash lives under root `node_modules`. Use
