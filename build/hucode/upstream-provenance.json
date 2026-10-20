@@ -470,6 +470,17 @@
 			"kind": "hucode-owned-upstream-path",
 			"reason": "Hucode owns native upstream-startup suppression policy",
 			"testSuites": []
+		},
+		{
+			"path": "build/lib/npmPackage.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode bypasses the repository npm min-release-age gate for npm pack fetches of lockfile pins whose sha512 integrity is verified",
+			"upstream": {
+				"path": "build/lib/npmPackage.ts",
+				"lastSyncedBaseline": "1.142.0",
+				"blob": "b75c3935ee115d8380d293c9d8da18edd309b17a"
+			},
+			"testSuites": []
 		}
 	]
 }

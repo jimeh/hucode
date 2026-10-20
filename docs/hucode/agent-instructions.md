@@ -471,7 +471,12 @@ human-facing guides rather than replacing them.
   globally downgrade npm separately in Mise or CI. The matching npm preserves
   the selected upstream baseline's lockfile metadata and enforces the repo's
   3-day `min-release-age` package gate. VS Code's preinstall guard rejects npm
-  12 and newer.
+  12 and newer. `npm ci` installs lockfile pins regardless of that gate, but
+  `npm pack` resolves through registry metadata and rejects a pin younger than
+  three days with `ETARGET`. `build/lib/npmPackage.ts` therefore passes
+  `--min-release-age=0` when it fetches a package pin that it will verify
+  against a lockfile `sha512` integrity. Without a `sha512` integrity,
+  the gate stays in force.
 - For parallel local git worktrees, dependency state is per worktree because
   VS Code's install hash lives under root `node_modules`. Use
   `npm run hucode:seed-worktree-node-modules` to copy every `node_modules` tree
