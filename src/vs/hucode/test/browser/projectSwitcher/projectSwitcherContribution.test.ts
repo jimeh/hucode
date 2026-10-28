@@ -73,6 +73,7 @@ import {
 	HUCODE_OMNI_TREE_INDENT_SETTING,
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
+	HucodeOmniWorktreeItemLayout,
 	IHucodeRetainedWorkbench,
 } from '../../../common/retainedWorkbench.js';
 import {
@@ -150,12 +151,18 @@ suite('ProjectSwitcherContribution', () => {
 				'branchPriority',
 				true
 			),
+			compactBranchPriorityItem: getProjectSwitcherItemHeight(
+				worktreeItem(),
+				'compactBranchPriority',
+				true
+			),
 		}, {
 			classicSection: 22,
 			modernSection: 28,
 			modernCompactItem: 22,
 			modernDefaultItem: 44,
 			branchPriorityItem: 44,
+			compactBranchPriorityItem: 22,
 		});
 	});
 
@@ -188,7 +195,7 @@ suite('ProjectSwitcherContribution', () => {
 		) as (
 			this: object,
 			item: ProjectSwitcherItem
-		) => 'default' | 'compact' | 'branchPriority';
+		) => HucodeOmniWorktreeItemLayout;
 
 		assert.deepStrictEqual({
 			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
@@ -226,6 +233,22 @@ suite('ProjectSwitcherContribution', () => {
 		}, {
 			workbench: 'default',
 			worktree: 'branchPriority',
+		});
+
+		values.set(
+			HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
+			'compactBranchPriority'
+		);
+		values.set(
+			HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
+			'compactBranchPriority'
+		);
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'default',
+			worktree: 'compactBranchPriority',
 		});
 	});
 
@@ -942,8 +965,8 @@ suite('ProjectSwitcherContribution', () => {
 		renderer.disposeTemplate(template);
 	});
 
-	test('places the branch before the name and the path below in branch priority', () => {
-		let layout: 'branchPriority' | 'default' = 'branchPriority';
+	test('arranges branch-priority row text and the branch icon', () => {
+		let layout: HucodeOmniWorktreeItemLayout = 'branchPriority';
 		const renderer = new ProjectSwitcherRenderer(
 			() => layout,
 			() => true,
@@ -969,6 +992,9 @@ suite('ProjectSwitcherContribution', () => {
 			return {
 				label: template.label.textContent,
 				description: template.descriptionText.textContent,
+				twoLine: template.container.classList.contains(
+					'hucode-project-switcher-two-line'
+				),
 				branchIcon: hasBranchIcon(template.labelIcon)
 					? 'label'
 					: hasBranchIcon(template.descriptionIcon)
@@ -1006,6 +1032,27 @@ suite('ProjectSwitcherContribution', () => {
 			path: undefined,
 		})), 0, template);
 		const sameNameWithoutPath = snapshot();
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Login work',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+			hasCustomLabel: true,
+		})), 0, template);
+		const customName = snapshot();
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Login work',
+			branch: 'feature/topic',
+			path: undefined,
+			hasCustomLabel: true,
+		})), 0, template);
+		const customNameWithoutPath = snapshot();
+		layout = 'compactBranchPriority';
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+		})), 0, template);
+		const compact = snapshot();
 		layout = 'default';
 		renderer.renderElement(treeNode(worktreeItem({
 			name: 'Feature',
@@ -1019,11 +1066,15 @@ suite('ProjectSwitcherContribution', () => {
 			withoutPath,
 			sameName,
 			sameNameWithoutPath,
+			customName,
+			customNameWithoutPath,
+			compact,
 			recycledDefault,
 		}, {
 			withPath: {
 				label: 'feature/topic',
 				description: 'Feature',
+				twoLine: true,
 				branchIcon: 'label',
 				placement: {
 					label: '1/1/auto',
@@ -1034,6 +1085,7 @@ suite('ProjectSwitcherContribution', () => {
 			withoutPath: {
 				label: 'feature/topic',
 				description: 'Feature',
+				twoLine: true,
 				branchIcon: 'label',
 				placement: {
 					label: '1/1/-1',
@@ -1044,6 +1096,7 @@ suite('ProjectSwitcherContribution', () => {
 			sameName: {
 				label: 'feature',
 				description: '',
+				twoLine: true,
 				branchIcon: 'label',
 				placement: {
 					label: '1/1/-1',
@@ -1054,6 +1107,7 @@ suite('ProjectSwitcherContribution', () => {
 			sameNameWithoutPath: {
 				label: 'feature',
 				description: 'feature',
+				twoLine: true,
 				branchIcon: 'label',
 				placement: {
 					label: '1/1/-1',
@@ -1061,9 +1115,43 @@ suite('ProjectSwitcherContribution', () => {
 					path: 'hidden',
 				},
 			},
+			customName: {
+				label: 'Login work',
+				description: 'feature/topic',
+				twoLine: true,
+				branchIcon: 'description',
+				placement: {
+					label: '1/1/auto',
+					description: '1/2/auto',
+					path: '2/1/-1',
+				},
+			},
+			customNameWithoutPath: {
+				label: 'Login work',
+				description: 'feature/topic',
+				twoLine: true,
+				branchIcon: 'description',
+				placement: {
+					label: '1/1/-1',
+					description: '2/1/-1',
+					path: 'hidden',
+				},
+			},
+			compact: {
+				label: 'feature/topic',
+				description: '',
+				twoLine: false,
+				branchIcon: 'label',
+				placement: {
+					label: 'auto/auto/auto',
+					description: 'hidden',
+					path: 'auto/auto/auto',
+				},
+			},
 			recycledDefault: {
 				label: 'Feature',
 				description: 'feature/topic',
+				twoLine: true,
 				branchIcon: 'description',
 				placement: {
 					label: '1/1/auto',

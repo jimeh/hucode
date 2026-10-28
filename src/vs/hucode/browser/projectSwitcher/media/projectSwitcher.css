@@ -316,10 +316,10 @@
 	grid-column: 1 / -1;
 }
 
-/* The branch is alone on the first line when the name is omitted or moves to
- * the second line in place of a hidden path. */
+/* The leading text is alone on the first line when the other text is omitted
+ * or moves to the second line in place of a hidden path. */
 .hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
-	.hucode-project-switcher-has-name)
+	.hucode-project-switcher-has-description)
 	.hucode-project-switcher-label,
 .hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
 	.hucode-project-switcher-has-path)
@@ -327,8 +327,8 @@
 	grid-column: 1 / -1;
 }
 
-/* Without a path, keep the worktree name on the second line instead of
- * leaving it empty. */
+/* Without a path, keep the other text on the second line instead of leaving
+ * it empty. */
 .hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
 	.hucode-project-switcher-has-path)
 	.hucode-project-switcher-description {

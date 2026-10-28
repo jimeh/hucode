@@ -157,6 +157,7 @@ import {
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
 	HucodeOmniWorktreeItemLayout,
+	isSingleLineHucodeOmniItemLayout,
 	normalizeHucodeOmniItemLayout,
 	normalizeHucodeOmniWorktreeItemLayout,
 } from '../../common/retainedWorkbench.js';
@@ -231,7 +232,7 @@ export function getProjectSwitcherItemHeight(
 		return MODERN_PROJECT_SWITCHER_SECTION_HEIGHT;
 	}
 
-	return layout === 'compact'
+	return isSingleLineHucodeOmniItemLayout(layout)
 		? PROJECT_SWITCHER_ITEM_HEIGHT
 		: PROJECT_SWITCHER_ITEM_HEIGHT * 2;
 }
@@ -590,18 +591,18 @@ export class ProjectSwitcherRenderer
 		templateData.pathIcon.className =
 			'hucode-project-switcher-inline-icon';
 		const layout = this.getItemLayout(item);
-		if (layout !== 'compact') {
+		if (!isSingleLineHucodeOmniItemLayout(layout)) {
 			templateData.container.classList.add(
 				'hucode-project-switcher-two-line'
 			);
 		}
 		const fields = getProjectSwitcherPresentationFields(item, layout);
-		const branchPriority = fields.primary === 'branch';
-		const primaryText = branchPriority ? fields.branch : fields.name;
-		const secondaryText = branchPriority ? fields.name : fields.branch;
+		const leadsWithBranch = fields.primary === 'branch';
+		const primaryText = leadsWithBranch ? fields.branch : fields.name;
+		const secondaryText = leadsWithBranch ? fields.name : fields.branch;
 		templateData.container.classList.toggle(
 			'hucode-project-switcher-branch-priority',
-			branchPriority
+			layout === 'branchPriority'
 		);
 		templateData.labelText.textContent = primaryText;
 		templateData.descriptionText.textContent = secondaryText ?? '';
@@ -610,7 +611,7 @@ export class ProjectSwitcherRenderer
 		templateData.path.style.display = fields.path ? '' : 'none';
 		const showMetadataIcons = this.showInlineIcons() &&
 			(isWorktreeItem(item) || isRetainedWorkbenchItem(item));
-		const branchIcon = branchPriority
+		const branchIcon = leadsWithBranch
 			? templateData.labelIcon
 			: templateData.descriptionIcon;
 		templateData.labelIcon.style.display = 'none';
@@ -629,8 +630,8 @@ export class ProjectSwitcherRenderer
 			);
 		}
 		templateData.container.classList.toggle(
-			'hucode-project-switcher-has-name',
-			!!fields.name
+			'hucode-project-switcher-has-description',
+			!!secondaryText
 		);
 		templateData.container.classList.toggle(
 			'hucode-project-switcher-has-branch',

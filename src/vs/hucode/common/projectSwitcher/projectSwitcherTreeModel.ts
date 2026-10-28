@@ -414,7 +414,7 @@ export function getProjectSwitcherItemDescription(
 /**
  * Explicit text fields rendered for a worktree or workbench row. The name is
  * the primary text unless `primary` selects the branch, in which case the name
- * is omitted when it would repeat the branch on the same line.
+ * becomes the secondary text.
  */
 export type ProjectSwitcherPresentationFields = {
 	readonly primary?: 'name';
@@ -434,15 +434,11 @@ export function getProjectSwitcherPresentationFields(
 	layout: HucodeOmniWorktreeItemLayout,
 ): ProjectSwitcherPresentationFields {
 	if (isWorktreeItem(item)) {
-		if (layout === 'branchPriority' && item.branch) {
-			return {
-				primary: 'branch',
-				name: item.path && item.name === item.branch
-					? undefined
-					: item.name,
-				branch: item.branch,
-				path: item.path,
-			};
+		if (layout === 'branchPriority' || layout === 'compactBranchPriority') {
+			return getBranchPriorityWorktreeFields(
+				item,
+				layout === 'compactBranchPriority'
+			);
 		}
 		return {
 			name: item.name,
@@ -462,6 +458,36 @@ export function getProjectSwitcherPresentationFields(
 	return {
 		name: item.label,
 		branch: getProjectSwitcherItemDescription(item, layout),
+	};
+}
+
+/**
+ * Leads with the branch unless the user gave the worktree a custom name, which
+ * then leads in its place. The two-line layout shows the other text beside the
+ * leading one, dropping it when it would repeat the leading text on the same
+ * line, and the path below. The compact layout shows only the leading text and
+ * the path.
+ */
+function getBranchPriorityWorktreeFields(
+	item: ProjectSwitcherWorktreeItem,
+	compact: boolean,
+): ProjectSwitcherPresentationFields {
+	const secondary = (other: string | undefined, leading: string) => {
+		const repeatsLeading = !!item.path && other === leading;
+		return compact || repeatsLeading ? undefined : other;
+	};
+	if (item.branch && !item.hasCustomLabel) {
+		return {
+			primary: 'branch',
+			name: secondary(item.name, item.branch),
+			branch: item.branch,
+			path: item.path,
+		};
+	}
+	return {
+		name: item.name,
+		branch: secondary(item.branch, item.name),
+		path: item.path,
 	};
 }
 

@@ -35,21 +35,27 @@ suite('RetainedWorkbench', () => {
 		});
 	});
 
-	test('accepts branch priority only as a worktree item layout', () => {
+	test('accepts branch priority layouts only for worktree items', () => {
 		assert.deepStrictEqual({
 			worktreeBranchPriority:
 				normalizeHucodeOmniWorktreeItemLayout('branchPriority'),
+			worktreeCompactBranchPriority:
+				normalizeHucodeOmniWorktreeItemLayout('compactBranchPriority'),
 			worktreeCompact: normalizeHucodeOmniWorktreeItemLayout('compact'),
 			worktreeLegacy: normalizeHucodeOmniWorktreeItemLayout('twoLine'),
 			worktreeInvalid: normalizeHucodeOmniWorktreeItemLayout('invalid'),
 			workbenchBranchPriority:
 				normalizeHucodeOmniItemLayout('branchPriority'),
+			workbenchCompactBranchPriority:
+				normalizeHucodeOmniItemLayout('compactBranchPriority'),
 		}, {
 			worktreeBranchPriority: 'branchPriority',
+			worktreeCompactBranchPriority: 'compactBranchPriority',
 			worktreeCompact: 'compact',
 			worktreeLegacy: 'default',
 			worktreeInvalid: 'default',
 			workbenchBranchPriority: 'default',
+			workbenchCompactBranchPriority: 'default',
 		});
 	});
 

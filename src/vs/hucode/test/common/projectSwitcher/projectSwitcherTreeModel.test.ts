@@ -1022,6 +1022,116 @@ suite('ProjectSwitcherTreeModel', () => {
 		});
 	});
 
+	test('drops the worktree name from compact branch-priority rows', () => {
+		const linkedPath = '/repos/hucode.worktrees/feature';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'hucode',
+				worktrees: [
+					createWorktree('/repos/hucode', {
+						isMain: true,
+						branch: 'main',
+					}),
+					createWorktree(linkedPath, { branch: 'feature/login' }),
+				],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => `label:${path}`,
+			isOmniWindow: true,
+			showWorktreePaths: true,
+			hostedWorkspaceState: createHostedState(),
+		});
+		const fields = (path: string, showPath = true) =>
+			getProjectSwitcherPresentationFields({
+				...getWorktree(model.roots, path),
+				...(showPath ? {} : { path: undefined }),
+			}, 'compactBranchPriority');
+
+		assert.deepStrictEqual({
+			main: fields('/repos/hucode'),
+			linkedWithoutPath: fields(linkedPath, false),
+		}, {
+			main: {
+				primary: 'branch',
+				name: undefined,
+				branch: 'main',
+				path: 'label:/repos/hucode',
+			},
+			linkedWithoutPath: {
+				primary: 'branch',
+				name: undefined,
+				branch: 'feature/login',
+				path: undefined,
+			},
+		});
+	});
+
+	test('leads branch-priority rows with a custom worktree name', () => {
+		const renamedPath = '/repos/hucode.worktrees/feature';
+		const sameNamePath = '/repos/hucode.worktrees/topic';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'hucode',
+				worktrees: [
+					createWorktree('/repos/hucode', { isMain: true }),
+					createWorktree(renamedPath, {
+						branch: 'feature/login',
+						customLabel: 'Login work',
+					}),
+					createWorktree(sameNamePath, {
+						branch: 'topic',
+						customLabel: 'topic',
+					}),
+				],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => `label:${path}`,
+			isOmniWindow: true,
+			showWorktreePaths: true,
+			hostedWorkspaceState: createHostedState(),
+		});
+		const fields = (
+			path: string,
+			layout: 'branchPriority' | 'compactBranchPriority',
+			showPath = true
+		) => getProjectSwitcherPresentationFields({
+			...getWorktree(model.roots, path),
+			...(showPath ? {} : { path: undefined }),
+		}, layout);
+
+		assert.deepStrictEqual({
+			twoLine: fields(renamedPath, 'branchPriority'),
+			twoLineSameName: fields(sameNamePath, 'branchPriority'),
+			compact: fields(renamedPath, 'compactBranchPriority'),
+			compactWithoutPath: fields(
+				renamedPath,
+				'compactBranchPriority',
+				false
+			),
+		}, {
+			twoLine: {
+				name: 'Login work',
+				branch: 'feature/login',
+				path: `label:${renamedPath}`,
+			},
+			twoLineSameName: {
+				name: 'topic',
+				branch: undefined,
+				path: `label:${sameNamePath}`,
+			},
+			compact: {
+				name: 'Login work',
+				branch: undefined,
+				path: `label:${renamedPath}`,
+			},
+			compactWithoutPath: {
+				name: 'Login work',
+				branch: undefined,
+				path: undefined,
+			},
+		});
+	});
+
 	test('hides only linked project paths when the path setting is off', () => {
 		const linkedPath = '/repos/hucode.worktrees/feature';
 		const model = buildProjectSwitcherTreeModel({

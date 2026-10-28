@@ -59,8 +59,12 @@ workbenches place the name and optional branch/status on the first line and keep
 the path on the second line. The worktree-only `branchPriority` layout leads
 with branch/status, places the name beside it, and keeps the path on the second
 line. It omits a name that would repeat the branch on the first line, and moves
-the name to the second line when the path is hidden. Project paths and the
-compact inline metadata icons can be hidden independently in settings.
+the name to the second line when the path is hidden. The single-line
+`compactBranchPriority` layout shows only branch/status and the path. In both
+branch-priority layouts, a worktree with a custom name leads with that name, and
+the branch takes the name's place beside it in the two-line layout. Resetting
+the name restores the branch. Project paths and the compact inline metadata
+icons can be hidden independently in settings.
 
 ## Workbench Lifecycle
 
@@ -156,7 +160,7 @@ This setting applies to both desktop Omni and serve-web Omni.
 | `hucode.omni.restoreHostedWorkbenches` | `active` | Choose `active`, `all`, or `none` for eager startup restoration. |
 | `hucode.omni.treeIndent` | `8` | Set Projects tree indentation from 4 to 40 pixels. |
 | `hucode.omni.workbenchItemLayout` | `default` | Use `default` two-line or `compact` single-line rows for arbitrary workbenches. |
-| `hucode.omni.worktreeItemLayout` | `default` | Use `default` two-line, `compact` single-line, or `branchPriority` two-line rows led by the branch for project worktrees. |
+| `hucode.omni.worktreeItemLayout` | `default` | Use `default` two-line or `compact` single-line rows for project worktrees, or `branchPriority` two-line and `compactBranchPriority` single-line rows led by the branch unless the worktree has a custom name. |
 | `hucode.omni.showWorktreePaths` | `true` | Show paths for root and linked project worktrees. Arbitrary workbench paths remain visible. |
 | `hucode.omni.showInlineIcons` | `true` | Show compact branch and folder icons beside row metadata. |
 | `hucode.omni.titleBar.projectControls.enabled` | `true` | Show project controls in the custom title bar when the Projects sidebar is hidden. |

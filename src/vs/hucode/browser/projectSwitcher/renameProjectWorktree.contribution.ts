@@ -225,13 +225,14 @@ registerAction2(class extends Action2 {
 			const defaultLabel = worktree.isMain
 				? localize('localWorktree', 'local')
 				: basename(worktree.path);
+			const currentLabel = worktree.customLabel ?? defaultLabel;
 			const label = await runShellRenameInput(
 				quickInputService,
 				environmentService,
 				shellService,
 				() => quickInputService.input({
 					prompt: localize('renameWorktreePrompt', 'Worktree label'),
-					value: worktree.customLabel ?? defaultLabel,
+					value: currentLabel,
 					validateInput: async value => value.trim()
 						? undefined
 						: localize(
@@ -240,7 +241,9 @@ registerAction2(class extends Action2 {
 						),
 				})
 			);
-			if (!label) {
+			// Confirming the prefilled default would otherwise store it as a
+			// custom name, which branch-priority rows show instead of the branch.
+			if (!label || label.trim() === currentLabel) {
 				return;
 			}
 

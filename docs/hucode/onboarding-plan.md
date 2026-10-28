@@ -94,7 +94,8 @@ The Projects sidebar exposes two window-scoped settings:
 
 Both accept `default` or `compact` and default to `default`.
 `hucode.omni.worktreeItemLayout` also accepts the worktree-only
-`branchPriority`, which the workbench setting normalizes to `default`. PR #207 migrated
+`branchPriority` and `compactBranchPriority`, which the workbench setting
+normalizes to `default`. PR #207 migrated
 explicit stored `twoLine` values to `default`, while runtime normalization
 continues to interpret a legacy `twoLine` value as `default`.
 
