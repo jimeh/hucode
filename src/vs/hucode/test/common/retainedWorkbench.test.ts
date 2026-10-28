@@ -12,6 +12,7 @@ import {
 	deserializeRetainedWorkbenches,
 	HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 	normalizeHucodeOmniItemLayout,
+	normalizeHucodeOmniWorktreeItemLayout,
 	RetainedWorkbenchCatalog,
 } from '../../common/retainedWorkbench.js';
 
@@ -31,6 +32,24 @@ suite('RetainedWorkbench', () => {
 			legacy: 'default',
 			absent: 'default',
 			invalid: 'default',
+		});
+	});
+
+	test('accepts branch priority only as a worktree item layout', () => {
+		assert.deepStrictEqual({
+			worktreeBranchPriority:
+				normalizeHucodeOmniWorktreeItemLayout('branchPriority'),
+			worktreeCompact: normalizeHucodeOmniWorktreeItemLayout('compact'),
+			worktreeLegacy: normalizeHucodeOmniWorktreeItemLayout('twoLine'),
+			worktreeInvalid: normalizeHucodeOmniWorktreeItemLayout('invalid'),
+			workbenchBranchPriority:
+				normalizeHucodeOmniItemLayout('branchPriority'),
+		}, {
+			worktreeBranchPriority: 'branchPriority',
+			worktreeCompact: 'compact',
+			worktreeLegacy: 'default',
+			worktreeInvalid: 'default',
+			workbenchBranchPriority: 'default',
 		});
 	});
 

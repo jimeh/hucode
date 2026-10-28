@@ -25,7 +25,7 @@ import {
 	ProjectSwitcherOmniSection,
 } from './projectSwitcherViewState.js';
 import {
-	HucodeOmniItemLayout,
+	HucodeOmniWorktreeItemLayout,
 	IHucodeRetainedWorkbench,
 } from '../retainedWorkbench.js';
 
@@ -400,7 +400,7 @@ export function getRetainedWorkbenchPresentation(
 /** Resolves secondary row text for compact and two-line layouts. */
 export function getProjectSwitcherItemDescription(
 	item: ProjectSwitcherItem,
-	layout: HucodeOmniItemLayout,
+	layout: HucodeOmniWorktreeItemLayout,
 ): string | undefined {
 	if (layout === 'compact' && item.kind === 'worktree' &&
 		item.description === item.label
@@ -411,25 +411,43 @@ export function getProjectSwitcherItemDescription(
 	return item.description;
 }
 
-/** Explicit text fields rendered for a worktree or workbench row. */
-export interface ProjectSwitcherPresentationFields {
+/**
+ * Explicit text fields rendered for a worktree or workbench row. The name is
+ * the primary text unless `primary` selects the branch, in which case the name
+ * is omitted when it repeats the branch.
+ */
+export type ProjectSwitcherPresentationFields = {
+	readonly primary?: 'name';
 	readonly name: string;
 	readonly branch?: string;
 	readonly path?: string;
-}
+} | {
+	readonly primary: 'branch';
+	readonly name?: string;
+	readonly branch: string;
+	readonly path?: string;
+};
 
 /** Resolves independently truncatable name, branch/status, and path fields. */
 export function getProjectSwitcherPresentationFields(
 	item: ProjectSwitcherItem,
-	layout: HucodeOmniItemLayout,
+	layout: HucodeOmniWorktreeItemLayout,
 ): ProjectSwitcherPresentationFields {
 	if (isWorktreeItem(item)) {
+		if (layout === 'branchPriority' && item.branch) {
+			return {
+				primary: 'branch',
+				name: item.name === item.branch ? undefined : item.name,
+				branch: item.branch,
+				path: item.path,
+			};
+		}
 		return {
 			name: item.name,
 			branch: layout === 'compact' && item.branch === item.name
 				? undefined
 				: item.branch,
-			path: layout === 'default' ? item.path : undefined,
+			path: layout === 'compact' ? undefined : item.path,
 		};
 	}
 	if (isRetainedWorkbenchItem(item)) {

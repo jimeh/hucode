@@ -162,12 +162,26 @@ Registry.as<IConfigurationRegistry>(
 		[HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING]: {
 			type: 'string',
 			order: 20,
-			enum: ['default', 'compact'],
+			enum: ['default', 'compact', 'branchPriority'],
+			markdownEnumDescriptions: [
+				localize(
+					'hucode.worktreeItemLayout.default',
+					"Show the worktree name and path on the first line and the branch below."
+				),
+				localize(
+					'hucode.worktreeItemLayout.compact',
+					"Show the worktree name and branch on a single line."
+				),
+				localize(
+					'hucode.worktreeItemLayout.branchPriority',
+					"Show the branch and worktree name on the first line and the path below."
+				),
+			],
 			default: HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
 				'hucode.worktreeItemLayout',
-				"Controls whether project worktrees use a compact single-line or two-line layout in the Omni sidebar."
+				"Controls whether project worktrees use a compact single-line or a two-line layout in the Omni sidebar, and whether the name or the branch leads two-line rows."
 			),
 		},
 		[HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING]: {

@@ -948,6 +948,69 @@ suite('ProjectSwitcherTreeModel', () => {
 		});
 	});
 
+	test('leads branch-priority worktree fields with the branch', () => {
+		const linkedPath = '/repos/hucode.worktrees/feature';
+		const detachedPath = '/repos/hucode.worktrees/detached';
+		const unnamedPath = '/repos/hucode.worktrees/unnamed';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'hucode',
+				worktrees: [
+					createWorktree('/repos/hucode', {
+						isMain: true,
+						branch: 'main',
+					}),
+					createWorktree(linkedPath, { branch: 'feature' }),
+					createWorktree(detachedPath, {
+						branch: undefined,
+						isDetached: true,
+					}),
+					createWorktree(unnamedPath, { branch: undefined }),
+				],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => `label:${path}`,
+			isOmniWindow: true,
+			showWorktreePaths: true,
+			hostedWorkspaceState: createHostedState(),
+		});
+		const fields = (path: string) => getProjectSwitcherPresentationFields(
+			getWorktree(model.roots, path),
+			'branchPriority'
+		);
+
+		assert.deepStrictEqual({
+			main: fields('/repos/hucode'),
+			linked: fields(linkedPath),
+			detached: fields(detachedPath),
+			unnamed: fields(unnamedPath),
+		}, {
+			main: {
+				primary: 'branch',
+				name: 'local',
+				branch: 'main',
+				path: 'label:/repos/hucode',
+			},
+			linked: {
+				primary: 'branch',
+				name: undefined,
+				branch: 'feature',
+				path: `label:${linkedPath}`,
+			},
+			detached: {
+				primary: 'branch',
+				name: 'detached',
+				branch: 'Detached',
+				path: `label:${detachedPath}`,
+			},
+			unnamed: {
+				name: 'unnamed',
+				branch: undefined,
+				path: `label:${unnamedPath}`,
+			},
+		});
+	});
+
 	test('hides only linked project paths when the path setting is off', () => {
 		const linkedPath = '/repos/hucode.worktrees/feature';
 		const model = buildProjectSwitcherTreeModel({

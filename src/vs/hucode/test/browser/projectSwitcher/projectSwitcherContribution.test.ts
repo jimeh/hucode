@@ -145,11 +145,17 @@ suite('ProjectSwitcherContribution', () => {
 				'default',
 				true
 			),
+			branchPriorityItem: getProjectSwitcherItemHeight(
+				worktreeItem(),
+				'branchPriority',
+				true
+			),
 		}, {
 			classicSection: 22,
 			modernSection: 28,
 			modernCompactItem: 22,
 			modernDefaultItem: 44,
+			branchPriorityItem: 44,
 		});
 	});
 
@@ -182,7 +188,7 @@ suite('ProjectSwitcherContribution', () => {
 		) as (
 			this: object,
 			item: ProjectSwitcherItem
-		) => 'default' | 'compact';
+		) => 'default' | 'compact' | 'branchPriority';
 
 		assert.deepStrictEqual({
 			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
@@ -210,6 +216,16 @@ suite('ProjectSwitcherContribution', () => {
 		}, {
 			workbench: 'compact',
 			worktree: 'default',
+		});
+
+		values.set(HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING, 'branchPriority');
+		values.set(HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING, 'branchPriority');
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'default',
+			worktree: 'branchPriority',
 		});
 	});
 
@@ -922,6 +938,79 @@ suite('ProjectSwitcherContribution', () => {
 			twoLineClass: true,
 			hasBranch: true,
 			hasPath: true,
+		});
+		renderer.disposeTemplate(template);
+	});
+
+	test('places the branch before the name and the path below in branch priority', () => {
+		const renderer = new ProjectSwitcherRenderer(
+			() => 'branchPriority',
+			() => true,
+			async () => undefined,
+			{ executeCommand: async () => undefined } as unknown as ICommandService
+		);
+		const container = mainWindow.document.createElement('div');
+		container.style.width = '300px';
+		mainWindow.document.body.appendChild(container);
+		disposables.add(toDisposable(() => container.remove()));
+		const template = renderer.renderTemplate(container);
+		const snapshot = () => {
+			const place = (element: HTMLElement) => {
+				const style = mainWindow.getComputedStyle(element);
+				return element.style.display === 'none'
+					? 'hidden'
+					: `${style.gridRowStart}/${style.gridColumnStart}`;
+			};
+			return {
+				label: template.label.textContent,
+				description: template.descriptionText.textContent,
+				branchIcon: template.descriptionIcon.style.display !== 'none',
+				placement: {
+					label: place(template.label),
+					description: place(template.description),
+					path: place(template.path),
+				},
+			};
+		};
+
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+		})), 0, template);
+		const withPath = snapshot();
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: undefined,
+		})), 0, template);
+		const withoutPath = snapshot();
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'feature',
+			branch: 'feature',
+			path: '/repo.worktrees/feature',
+		})), 0, template);
+		const sameName = snapshot();
+
+		assert.deepStrictEqual({ withPath, withoutPath, sameName }, {
+			withPath: {
+				label: 'feature/topic',
+				description: 'Feature',
+				branchIcon: false,
+				placement: { label: '1/1', description: '1/2', path: '2/1' },
+			},
+			withoutPath: {
+				label: 'feature/topic',
+				description: 'Feature',
+				branchIcon: false,
+				placement: { label: '1/1', description: '2/1', path: 'hidden' },
+			},
+			sameName: {
+				label: 'feature',
+				description: '',
+				branchIcon: false,
+				placement: { label: '1/1', description: 'hidden', path: '2/1' },
+			},
 		});
 		renderer.disposeTemplate(template);
 	});

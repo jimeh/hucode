@@ -153,7 +153,7 @@ This setting applies to both desktop Omni and serve-web Omni.
 | `hucode.omni.restoreHostedWorkbenches` | `active` | Choose `active`, `all`, or `none` for eager startup restoration. |
 | `hucode.omni.treeIndent` | `8` | Set Projects tree indentation from 4 to 40 pixels. |
 | `hucode.omni.workbenchItemLayout` | `default` | Use `default` two-line or `compact` single-line rows for arbitrary workbenches. |
-| `hucode.omni.worktreeItemLayout` | `default` | Use `default` two-line or `compact` single-line rows for project worktrees. |
+| `hucode.omni.worktreeItemLayout` | `default` | Use `default` two-line, `compact` single-line, or `branchPriority` two-line rows led by the branch for project worktrees. |
 | `hucode.omni.showWorktreePaths` | `true` | Show paths for root and linked project worktrees. Arbitrary workbench paths remain visible. |
 | `hucode.omni.showInlineIcons` | `true` | Show compact branch and folder icons beside row metadata. |
 | `hucode.omni.titleBar.projectControls.enabled` | `true` | Show project controls in the custom title bar when the Projects sidebar is hidden. |
