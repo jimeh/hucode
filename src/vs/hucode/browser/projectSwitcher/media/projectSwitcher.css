@@ -316,9 +316,13 @@
 	grid-column: 1 / -1;
 }
 
-/* An omitted duplicate name leaves the branch alone on the first line. */
+/* The branch is alone on the first line when the name is omitted or moves to
+ * the second line in place of a hidden path. */
 .hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
 	.hucode-project-switcher-has-name)
+	.hucode-project-switcher-label,
+.hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
+	.hucode-project-switcher-has-path)
 	.hucode-project-switcher-label {
 	grid-column: 1 / -1;
 }

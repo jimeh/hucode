@@ -1029,7 +1029,7 @@ suite('ProjectSwitcherContribution', () => {
 				description: 'Feature',
 				branchIcon: false,
 				placement: {
-					label: '1/1/auto',
+					label: '1/1/-1',
 					description: '2/1/-1',
 					path: 'hidden',
 				},
@@ -1049,7 +1049,7 @@ suite('ProjectSwitcherContribution', () => {
 				description: 'feature',
 				branchIcon: false,
 				placement: {
-					label: '1/1/auto',
+					label: '1/1/-1',
 					description: '2/1/-1',
 					path: 'hidden',
 				},
