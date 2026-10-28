@@ -56,8 +56,11 @@ compact arbitrary-workbench rows show the name followed by path. The secondary
 field truncates before the name. Two-line project-worktree rows place the name
 and optional path on the first line with branch/status below. Two-line arbitrary
 workbenches place the name and optional branch/status on the first line and keep
-the path on the second line. Project paths and the compact inline metadata
-icons can be hidden independently in settings.
+the path on the second line. The worktree-only `branchPriority` layout leads
+with branch/status, places the name beside it, and keeps the path on the second
+line. It omits a name that would repeat the branch on the first line, and moves
+the name to the second line when the path is hidden. Project paths and the
+compact inline metadata icons can be hidden independently in settings.
 
 ## Workbench Lifecycle
 

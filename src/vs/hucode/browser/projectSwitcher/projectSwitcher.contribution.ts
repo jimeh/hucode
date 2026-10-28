@@ -612,8 +612,12 @@ export class ProjectSwitcherRenderer
 			);
 		}
 		templateData.container.classList.toggle(
+			'hucode-project-switcher-has-name',
+			!!fields.name
+		);
+		templateData.container.classList.toggle(
 			'hucode-project-switcher-has-branch',
-			!!secondaryText
+			!!fields.branch
 		);
 		templateData.container.classList.toggle(
 			'hucode-project-switcher-has-path',

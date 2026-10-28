@@ -978,12 +978,17 @@ suite('ProjectSwitcherTreeModel', () => {
 			getWorktree(model.roots, path),
 			'branchPriority'
 		);
+		const linkedWithoutPath = getProjectSwitcherPresentationFields(
+			{ ...getWorktree(model.roots, linkedPath), path: undefined },
+			'branchPriority'
+		);
 
 		assert.deepStrictEqual({
 			main: fields('/repos/hucode'),
 			linked: fields(linkedPath),
 			detached: fields(detachedPath),
 			unnamed: fields(unnamedPath),
+			linkedWithoutPath,
 		}, {
 			main: {
 				primary: 'branch',
@@ -1007,6 +1012,12 @@ suite('ProjectSwitcherTreeModel', () => {
 				name: 'unnamed',
 				branch: undefined,
 				path: `label:${unnamedPath}`,
+			},
+			linkedWithoutPath: {
+				primary: 'branch',
+				name: 'feature',
+				branch: 'feature',
+				path: undefined,
 			},
 		});
 	});

@@ -943,8 +943,9 @@ suite('ProjectSwitcherContribution', () => {
 	});
 
 	test('places the branch before the name and the path below in branch priority', () => {
+		let layout: 'branchPriority' | 'default' = 'branchPriority';
 		const renderer = new ProjectSwitcherRenderer(
-			() => 'branchPriority',
+			() => layout,
 			() => true,
 			async () => undefined,
 			{ executeCommand: async () => undefined } as unknown as ICommandService
@@ -959,7 +960,8 @@ suite('ProjectSwitcherContribution', () => {
 				const style = mainWindow.getComputedStyle(element);
 				return element.style.display === 'none'
 					? 'hidden'
-					: `${style.gridRowStart}/${style.gridColumnStart}`;
+					: `${style.gridRowStart}/${style.gridColumnStart}/` +
+					style.gridColumnEnd;
 			};
 			return {
 				label: template.label.textContent,
@@ -991,25 +993,76 @@ suite('ProjectSwitcherContribution', () => {
 			path: '/repo.worktrees/feature',
 		})), 0, template);
 		const sameName = snapshot();
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'feature',
+			branch: 'feature',
+			path: undefined,
+		})), 0, template);
+		const sameNameWithoutPath = snapshot();
+		layout = 'default';
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+		})), 0, template);
+		const recycledDefault = snapshot();
 
-		assert.deepStrictEqual({ withPath, withoutPath, sameName }, {
+		assert.deepStrictEqual({
+			withPath,
+			withoutPath,
+			sameName,
+			sameNameWithoutPath,
+			recycledDefault,
+		}, {
 			withPath: {
 				label: 'feature/topic',
 				description: 'Feature',
 				branchIcon: false,
-				placement: { label: '1/1', description: '1/2', path: '2/1' },
+				placement: {
+					label: '1/1/auto',
+					description: '1/2/auto',
+					path: '2/1/-1',
+				},
 			},
 			withoutPath: {
 				label: 'feature/topic',
 				description: 'Feature',
 				branchIcon: false,
-				placement: { label: '1/1', description: '2/1', path: 'hidden' },
+				placement: {
+					label: '1/1/auto',
+					description: '2/1/-1',
+					path: 'hidden',
+				},
 			},
 			sameName: {
 				label: 'feature',
 				description: '',
 				branchIcon: false,
-				placement: { label: '1/1', description: 'hidden', path: '2/1' },
+				placement: {
+					label: '1/1/-1',
+					description: 'hidden',
+					path: '2/1/-1',
+				},
+			},
+			sameNameWithoutPath: {
+				label: 'feature',
+				description: 'feature',
+				branchIcon: false,
+				placement: {
+					label: '1/1/auto',
+					description: '2/1/-1',
+					path: 'hidden',
+				},
+			},
+			recycledDefault: {
+				label: 'Feature',
+				description: 'feature/topic',
+				branchIcon: true,
+				placement: {
+					label: '1/1/auto',
+					description: '2/1/-1',
+					path: '1/2/auto',
+				},
 			},
 		});
 		renderer.disposeTemplate(template);

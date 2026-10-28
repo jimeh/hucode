@@ -414,7 +414,7 @@ export function getProjectSwitcherItemDescription(
 /**
  * Explicit text fields rendered for a worktree or workbench row. The name is
  * the primary text unless `primary` selects the branch, in which case the name
- * is omitted when it repeats the branch.
+ * is omitted when it would repeat the branch on the same line.
  */
 export type ProjectSwitcherPresentationFields = {
 	readonly primary?: 'name';
@@ -437,7 +437,9 @@ export function getProjectSwitcherPresentationFields(
 		if (layout === 'branchPriority' && item.branch) {
 			return {
 				primary: 'branch',
-				name: item.name === item.branch ? undefined : item.name,
+				name: item.path && item.name === item.branch
+					? undefined
+					: item.name,
 				branch: item.branch,
 				path: item.path,
 			};

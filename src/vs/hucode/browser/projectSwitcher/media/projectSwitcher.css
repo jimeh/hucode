@@ -316,6 +316,13 @@
 	grid-column: 1 / -1;
 }
 
+/* An omitted duplicate name leaves the branch alone on the first line. */
+.hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
+	.hucode-project-switcher-has-name)
+	.hucode-project-switcher-label {
+	grid-column: 1 / -1;
+}
+
 /* Without a path, keep the worktree name on the second line instead of
  * leaving it empty. */
 .hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
