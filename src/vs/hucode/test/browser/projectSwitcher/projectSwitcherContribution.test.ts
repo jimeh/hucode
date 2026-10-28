@@ -963,10 +963,17 @@ suite('ProjectSwitcherContribution', () => {
 					: `${style.gridRowStart}/${style.gridColumnStart}/` +
 					style.gridColumnEnd;
 			};
+			const hasBranchIcon = (icon: HTMLElement) =>
+				icon.style.display !== 'none' &&
+				icon.classList.contains('codicon-git-branch-compact');
 			return {
 				label: template.label.textContent,
 				description: template.descriptionText.textContent,
-				branchIcon: template.descriptionIcon.style.display !== 'none',
+				branchIcon: hasBranchIcon(template.labelIcon)
+					? 'label'
+					: hasBranchIcon(template.descriptionIcon)
+						? 'description'
+						: 'none',
 				placement: {
 					label: place(template.label),
 					description: place(template.description),
@@ -1017,7 +1024,7 @@ suite('ProjectSwitcherContribution', () => {
 			withPath: {
 				label: 'feature/topic',
 				description: 'Feature',
-				branchIcon: false,
+				branchIcon: 'label',
 				placement: {
 					label: '1/1/auto',
 					description: '1/2/auto',
@@ -1027,7 +1034,7 @@ suite('ProjectSwitcherContribution', () => {
 			withoutPath: {
 				label: 'feature/topic',
 				description: 'Feature',
-				branchIcon: false,
+				branchIcon: 'label',
 				placement: {
 					label: '1/1/-1',
 					description: '2/1/-1',
@@ -1037,7 +1044,7 @@ suite('ProjectSwitcherContribution', () => {
 			sameName: {
 				label: 'feature',
 				description: '',
-				branchIcon: false,
+				branchIcon: 'label',
 				placement: {
 					label: '1/1/-1',
 					description: 'hidden',
@@ -1047,7 +1054,7 @@ suite('ProjectSwitcherContribution', () => {
 			sameNameWithoutPath: {
 				label: 'feature',
 				description: 'feature',
-				branchIcon: false,
+				branchIcon: 'label',
 				placement: {
 					label: '1/1/-1',
 					description: '2/1/-1',
@@ -1057,7 +1064,7 @@ suite('ProjectSwitcherContribution', () => {
 			recycledDefault: {
 				label: 'Feature',
 				description: 'feature/topic',
-				branchIcon: true,
+				branchIcon: 'description',
 				placement: {
 					label: '1/1/auto',
 					description: '2/1/-1',

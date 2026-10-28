@@ -421,6 +421,8 @@ interface ProjectSwitcherTemplate {
 	readonly icon: HTMLElement;
 	readonly text: HTMLElement;
 	readonly label: HTMLSpanElement;
+	readonly labelIcon: HTMLSpanElement;
+	readonly labelText: HTMLSpanElement;
 	readonly description: HTMLSpanElement;
 	readonly descriptionIcon: HTMLSpanElement;
 	readonly descriptionText: HTMLSpanElement;
@@ -473,6 +475,15 @@ export class ProjectSwitcherRenderer
 		const label = dom.append(
 			text,
 			dom.$('span.hucode-project-switcher-label')
+		) as HTMLSpanElement;
+		const labelIcon = dom.append(
+			label,
+			dom.$('span.hucode-project-switcher-inline-icon')
+		) as HTMLSpanElement;
+		labelIcon.setAttribute('aria-hidden', 'true');
+		const labelText = dom.append(
+			label,
+			dom.$('span.hucode-project-switcher-field-text')
 		) as HTMLSpanElement;
 		const description = dom.append(
 			text,
@@ -542,6 +553,8 @@ export class ProjectSwitcherRenderer
 			icon,
 			text,
 			label,
+			labelIcon,
+			labelText,
 			description,
 			descriptionIcon,
 			descriptionText,
@@ -570,6 +583,8 @@ export class ProjectSwitcherRenderer
 		templateData.container.className = 'hucode-project-switcher-item';
 		templateData.icon.className = 'hucode-project-switcher-icon';
 		templateData.text.className = 'hucode-project-switcher-text';
+		templateData.labelIcon.className =
+			'hucode-project-switcher-inline-icon';
 		templateData.descriptionIcon.className =
 			'hucode-project-switcher-inline-icon';
 		templateData.pathIcon.className =
@@ -588,21 +603,23 @@ export class ProjectSwitcherRenderer
 			'hucode-project-switcher-branch-priority',
 			branchPriority
 		);
-		templateData.label.textContent = primaryText;
+		templateData.labelText.textContent = primaryText;
 		templateData.descriptionText.textContent = secondaryText ?? '';
 		templateData.description.style.display = secondaryText ? '' : 'none';
 		templateData.pathText.textContent = fields.path ?? '';
 		templateData.path.style.display = fields.path ? '' : 'none';
 		const showMetadataIcons = this.showInlineIcons() &&
 			(isWorktreeItem(item) || isRetainedWorkbenchItem(item));
-		const showBranchIcon = showMetadataIcons && !branchPriority &&
-			!!secondaryText;
-		templateData.descriptionIcon.style.display =
-			showBranchIcon ? '' : 'none';
+		const branchIcon = branchPriority
+			? templateData.labelIcon
+			: templateData.descriptionIcon;
+		templateData.labelIcon.style.display = 'none';
+		templateData.descriptionIcon.style.display = 'none';
 		templateData.pathIcon.style.display =
 			showMetadataIcons && fields.path ? '' : 'none';
-		if (showBranchIcon) {
-			templateData.descriptionIcon.classList.add(
+		if (showMetadataIcons && fields.branch) {
+			branchIcon.style.display = '';
+			branchIcon.classList.add(
 				...ThemeIcon.asClassNameArray(Codicon.gitBranchCompact)
 			);
 		}
