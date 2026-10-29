@@ -25,7 +25,7 @@ import {
 	ProjectSwitcherOmniSection,
 } from './projectSwitcherViewState.js';
 import {
-	HucodeOmniItemLayout,
+	HucodeOmniWorktreeItemLayout,
 	IHucodeRetainedWorkbench,
 } from '../retainedWorkbench.js';
 
@@ -400,7 +400,7 @@ export function getRetainedWorkbenchPresentation(
 /** Resolves secondary row text for compact and two-line layouts. */
 export function getProjectSwitcherItemDescription(
 	item: ProjectSwitcherItem,
-	layout: HucodeOmniItemLayout,
+	layout: HucodeOmniWorktreeItemLayout,
 ): string | undefined {
 	if (layout === 'compact' && item.kind === 'worktree' &&
 		item.description === item.label
@@ -411,25 +411,41 @@ export function getProjectSwitcherItemDescription(
 	return item.description;
 }
 
-/** Explicit text fields rendered for a worktree or workbench row. */
-export interface ProjectSwitcherPresentationFields {
+/**
+ * Explicit text fields rendered for a worktree or workbench row. The name is
+ * the primary text unless `primary` selects the branch, in which case the name
+ * becomes the secondary text.
+ */
+export type ProjectSwitcherPresentationFields = {
+	readonly primary?: 'name';
 	readonly name: string;
 	readonly branch?: string;
 	readonly path?: string;
-}
+} | {
+	readonly primary: 'branch';
+	readonly name?: string;
+	readonly branch: string;
+	readonly path?: string;
+};
 
 /** Resolves independently truncatable name, branch/status, and path fields. */
 export function getProjectSwitcherPresentationFields(
 	item: ProjectSwitcherItem,
-	layout: HucodeOmniItemLayout,
+	layout: HucodeOmniWorktreeItemLayout,
 ): ProjectSwitcherPresentationFields {
 	if (isWorktreeItem(item)) {
+		if (layout === 'branchPriority' || layout === 'compactBranchPriority') {
+			return getBranchPriorityWorktreeFields(
+				item,
+				layout === 'compactBranchPriority'
+			);
+		}
 		return {
 			name: item.name,
 			branch: layout === 'compact' && item.branch === item.name
 				? undefined
 				: item.branch,
-			path: layout === 'default' ? item.path : undefined,
+			path: layout === 'compact' ? undefined : item.path,
 		};
 	}
 	if (isRetainedWorkbenchItem(item)) {
@@ -442,6 +458,36 @@ export function getProjectSwitcherPresentationFields(
 	return {
 		name: item.label,
 		branch: getProjectSwitcherItemDescription(item, layout),
+	};
+}
+
+/**
+ * Leads with the branch unless the user gave the worktree a custom name, which
+ * then leads in its place. The two-line layout shows the other text beside the
+ * leading one, dropping it when it would repeat the leading text on the same
+ * line, and the path below. The compact layout shows only the leading text and
+ * the path.
+ */
+function getBranchPriorityWorktreeFields(
+	item: ProjectSwitcherWorktreeItem,
+	compact: boolean,
+): ProjectSwitcherPresentationFields {
+	const secondary = (other: string | undefined, leading: string) => {
+		const repeatsLeading = !!item.path && other === leading;
+		return compact || repeatsLeading ? undefined : other;
+	};
+	if (item.branch && !item.hasCustomLabel) {
+		return {
+			primary: 'branch',
+			name: secondary(item.name, item.branch),
+			branch: item.branch,
+			path: item.path,
+		};
+	}
+	return {
+		name: item.name,
+		branch: secondary(item.branch, item.name),
+		path: item.path,
 	};
 }
 

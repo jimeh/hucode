@@ -156,8 +156,10 @@ import {
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
-	HucodeOmniItemLayout,
+	HucodeOmniWorktreeItemLayout,
+	isSingleLineHucodeOmniItemLayout,
 	normalizeHucodeOmniItemLayout,
+	normalizeHucodeOmniWorktreeItemLayout,
 } from '../../common/retainedWorkbench.js';
 import {
 	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
@@ -223,16 +225,16 @@ let currentProjectSwitcherWidget: ProjectSwitcherWidget | undefined;
 /** Returns the row height for the current Omni item layout and workbench style. */
 export function getProjectSwitcherItemHeight(
 	item: ProjectSwitcherItem,
-	layout: HucodeOmniItemLayout,
+	layout: HucodeOmniWorktreeItemLayout,
 	modernUI: boolean
 ): number {
 	if (modernUI && isOmniSectionItem(item)) {
 		return MODERN_PROJECT_SWITCHER_SECTION_HEIGHT;
 	}
 
-	return layout === 'default'
-		? PROJECT_SWITCHER_ITEM_HEIGHT * 2
-		: PROJECT_SWITCHER_ITEM_HEIGHT;
+	return isSingleLineHucodeOmniItemLayout(layout)
+		? PROJECT_SWITCHER_ITEM_HEIGHT
+		: PROJECT_SWITCHER_ITEM_HEIGHT * 2;
 }
 
 /** Returns the outer top inset for the synthetic Omni sections. */
@@ -398,7 +400,7 @@ class ProjectSwitcherDelegate
 	constructor(
 		private readonly getItemLayout: (
 			item: ProjectSwitcherItem
-		) => HucodeOmniItemLayout,
+		) => HucodeOmniWorktreeItemLayout,
 		private readonly isModernUIEnabled: () => boolean,
 	) { }
 
@@ -420,6 +422,8 @@ interface ProjectSwitcherTemplate {
 	readonly icon: HTMLElement;
 	readonly text: HTMLElement;
 	readonly label: HTMLSpanElement;
+	readonly labelIcon: HTMLSpanElement;
+	readonly labelText: HTMLSpanElement;
 	readonly description: HTMLSpanElement;
 	readonly descriptionIcon: HTMLSpanElement;
 	readonly descriptionText: HTMLSpanElement;
@@ -455,7 +459,7 @@ export class ProjectSwitcherRenderer
 	constructor(
 		private readonly getItemLayout: (
 			item: ProjectSwitcherItem
-		) => HucodeOmniItemLayout,
+		) => HucodeOmniWorktreeItemLayout,
 		private readonly showInlineIcons: () => boolean,
 		private readonly unloadFromSidebar: (
 			item: ProjectSwitcherWorktreeItem | ProjectSwitcherWorkbenchItem
@@ -472,6 +476,15 @@ export class ProjectSwitcherRenderer
 		const label = dom.append(
 			text,
 			dom.$('span.hucode-project-switcher-label')
+		) as HTMLSpanElement;
+		const labelIcon = dom.append(
+			label,
+			dom.$('span.hucode-project-switcher-inline-icon')
+		) as HTMLSpanElement;
+		labelIcon.setAttribute('aria-hidden', 'true');
+		const labelText = dom.append(
+			label,
+			dom.$('span.hucode-project-switcher-field-text')
 		) as HTMLSpanElement;
 		const description = dom.append(
 			text,
@@ -541,6 +554,8 @@ export class ProjectSwitcherRenderer
 			icon,
 			text,
 			label,
+			labelIcon,
+			labelText,
 			description,
 			descriptionIcon,
 			descriptionText,
@@ -569,32 +584,43 @@ export class ProjectSwitcherRenderer
 		templateData.container.className = 'hucode-project-switcher-item';
 		templateData.icon.className = 'hucode-project-switcher-icon';
 		templateData.text.className = 'hucode-project-switcher-text';
+		templateData.labelIcon.className =
+			'hucode-project-switcher-inline-icon';
 		templateData.descriptionIcon.className =
 			'hucode-project-switcher-inline-icon';
 		templateData.pathIcon.className =
 			'hucode-project-switcher-inline-icon';
-		if (this.getItemLayout(item) === 'default') {
+		const layout = this.getItemLayout(item);
+		if (!isSingleLineHucodeOmniItemLayout(layout)) {
 			templateData.container.classList.add(
 				'hucode-project-switcher-two-line'
 			);
 		}
-		const fields = getProjectSwitcherPresentationFields(
-			item,
-			this.getItemLayout(item)
+		const fields = getProjectSwitcherPresentationFields(item, layout);
+		const leadsWithBranch = fields.primary === 'branch';
+		const primaryText = leadsWithBranch ? fields.branch : fields.name;
+		const secondaryText = leadsWithBranch ? fields.name : fields.branch;
+		templateData.container.classList.toggle(
+			'hucode-project-switcher-branch-priority',
+			layout === 'branchPriority'
 		);
-		templateData.label.textContent = fields.name;
-		templateData.descriptionText.textContent = fields.branch ?? '';
-		templateData.description.style.display = fields.branch ? '' : 'none';
+		templateData.labelText.textContent = primaryText;
+		templateData.descriptionText.textContent = secondaryText ?? '';
+		templateData.description.style.display = secondaryText ? '' : 'none';
 		templateData.pathText.textContent = fields.path ?? '';
 		templateData.path.style.display = fields.path ? '' : 'none';
 		const showMetadataIcons = this.showInlineIcons() &&
 			(isWorktreeItem(item) || isRetainedWorkbenchItem(item));
-		templateData.descriptionIcon.style.display =
-			showMetadataIcons && fields.branch ? '' : 'none';
+		const branchIcon = leadsWithBranch
+			? templateData.labelIcon
+			: templateData.descriptionIcon;
+		templateData.labelIcon.style.display = 'none';
+		templateData.descriptionIcon.style.display = 'none';
 		templateData.pathIcon.style.display =
 			showMetadataIcons && fields.path ? '' : 'none';
 		if (showMetadataIcons && fields.branch) {
-			templateData.descriptionIcon.classList.add(
+			branchIcon.style.display = '';
+			branchIcon.classList.add(
 				...ThemeIcon.asClassNameArray(Codicon.gitBranchCompact)
 			);
 		}
@@ -603,6 +629,10 @@ export class ProjectSwitcherRenderer
 				...ThemeIcon.asClassNameArray(Codicon.folderCompact)
 			);
 		}
+		templateData.container.classList.toggle(
+			'hucode-project-switcher-has-description',
+			!!secondaryText
+		);
 		templateData.container.classList.toggle(
 			'hucode-project-switcher-has-branch',
 			!!fields.branch
@@ -1405,7 +1435,9 @@ export class ProjectSwitcherWidget extends Disposable {
 		return this.labelService.getUriLabel(URI.file(path));
 	}
 
-	private getItemLayout(item: ProjectSwitcherItem): HucodeOmniItemLayout {
+	private getItemLayout(
+		item: ProjectSwitcherItem
+	): HucodeOmniWorktreeItemLayout {
 		if (!this.environmentService.isOmniWindow) {
 			return 'compact';
 		}
@@ -1417,7 +1449,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			);
 		}
 		if (isWorktreeItem(item)) {
-			return normalizeHucodeOmniItemLayout(
+			return normalizeHucodeOmniWorktreeItemLayout(
 				this.configurationService.getValue<unknown>(
 					HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
 				)

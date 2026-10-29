@@ -301,13 +301,37 @@
 }
 
 .hucode-project-switcher-two-line.hucode-project-switcher-workbench
+	.hucode-project-switcher-description,
+.hucode-project-switcher-two-line.hucode-project-switcher-branch-priority
 	.hucode-project-switcher-description {
 	grid-row: 1;
 	grid-column: 2;
 }
 
 .hucode-project-switcher-two-line.hucode-project-switcher-workbench
+	.hucode-project-switcher-path,
+.hucode-project-switcher-two-line.hucode-project-switcher-branch-priority
 	.hucode-project-switcher-path {
+	grid-row: 2;
+	grid-column: 1 / -1;
+}
+
+/* The leading text is alone on the first line when the other text is omitted
+ * or moves to the second line in place of a hidden path. */
+.hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
+	.hucode-project-switcher-has-description)
+	.hucode-project-switcher-label,
+.hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
+	.hucode-project-switcher-has-path)
+	.hucode-project-switcher-label {
+	grid-column: 1 / -1;
+}
+
+/* Without a path, keep the other text on the second line instead of leaving
+ * it empty. */
+.hucode-project-switcher-two-line.hucode-project-switcher-branch-priority:not(
+	.hucode-project-switcher-has-path)
+	.hucode-project-switcher-description {
 	grid-row: 2;
 	grid-column: 1 / -1;
 }

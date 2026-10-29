@@ -59,6 +59,32 @@ export function normalizeHucodeOmniItemLayout(
 	return value === 'compact' ? 'compact' : HUCODE_OMNI_ITEM_LAYOUT_DEFAULT;
 }
 
+/**
+ * Layout variants supported by Omni sidebar project worktree rows.
+ * `branchPriority` and `compactBranchPriority` are two-line and single-line
+ * layouts led by the branch instead of the name.
+ */
+export type HucodeOmniWorktreeItemLayout =
+	| HucodeOmniItemLayout
+	| 'branchPriority'
+	| 'compactBranchPriority';
+
+/** Normalizes persisted Omni worktree item layout values. */
+export function normalizeHucodeOmniWorktreeItemLayout(
+	value: unknown
+): HucodeOmniWorktreeItemLayout {
+	return value === 'branchPriority' || value === 'compactBranchPriority'
+		? value
+		: normalizeHucodeOmniItemLayout(value);
+}
+
+/** Whether an Omni sidebar item layout renders rows on a single line. */
+export function isSingleLineHucodeOmniItemLayout(
+	layout: HucodeOmniWorktreeItemLayout
+): boolean {
+	return layout === 'compact' || layout === 'compactBranchPriority';
+}
+
 /** User setting controlling arbitrary workbench row layout. */
 export const HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING =
 	'hucode.omni.workbenchItemLayout';
