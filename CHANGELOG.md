@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.98 - 2026-10-29
+
+### Features
+
+- **omni:** add branch-priority worktree layouts (#243)
+
 ## 0.0.97 - 2026-10-28
 
 ### Features
