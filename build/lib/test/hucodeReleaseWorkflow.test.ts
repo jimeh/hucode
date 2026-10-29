@@ -121,13 +121,28 @@ suite('Hucode release workflow contract', () => {
 
 	test('runs arm64 package smoke natively', () => {
 		assert.match(linuxSmokeMatrixBuilder, /\? 'ubuntu-24\.04-arm'/);
-		assert.match(linuxSmokeMatrixBuilder, /: 'ubuntu-latest'/);
+		assert.match(linuxSmokeMatrixBuilder, /: 'ubuntu-24\.04'/);
 		assert.match(linuxPackageSmokeJob, /runs-on: \$\{\{ matrix\.runner \}\}/);
 		assert.doesNotMatch(linuxPackageSmokeJob, /setup-qemu-action/);
 		assert.match(
 			workflow,
 			/copilot-vsix:[\s\S]*?runs-on: ubuntu-latest[\s\S]*?linux-package-smoke:/
 		);
+	});
+
+	test('pins Linux app jobs to an image Chromium packaging supports', () => {
+		const runsOn = (name: string) => new RegExp(`\\n  ${name}:\\n(?:    .*\\n)*?    runs-on: (.+)\\n`).exec(workflow)?.[1];
+		const linuxTargetRunners = [...workflow.matchAll(/id: 'linux-[^']+',[\s\S]*?runner: '([^']+)'/g)]
+			.map(match => match[1]);
+		assert.deepStrictEqual({
+			linuxTargetRunners,
+			cli: runsOn('linux-arm64-cli'),
+			lifecycleSmoke: runsOn('linux-omni-lifecycle-smoke'),
+		}, {
+			linuxTargetRunners: ['ubuntu-24.04', 'ubuntu-24.04', 'ubuntu-24.04'],
+			cli: 'ubuntu-24.04',
+			lifecycleSmoke: 'ubuntu-24.04',
+		});
 	});
 
 	test('serializes release mutation without cancelling an active run', () => {

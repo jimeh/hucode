@@ -100,6 +100,9 @@ jobs:
               runner: 'macos-15',
               artifacts: 'dmg,archive,cli'
             },
+            // Linux app jobs pin their image. Chromium's dpkg-shlibdeps.pl
+            // crashes against the libdpkg-perl in Ubuntu 26.04, which
+            // ubuntu-latest moved to between releases.
             {
               id: 'linux-x64',
               platform: 'linux',
@@ -107,7 +110,7 @@ jobs:
               npm_arch: 'x64',
               openssl_arch: 'x64-linux',
               rust_target: 'x86_64-unknown-linux-gnu',
-              runner: 'ubuntu-latest',
+              runner: 'ubuntu-24.04',
               artifacts: 'archive,cli,deb,rpm'
             },
             {
@@ -117,7 +120,7 @@ jobs:
               npm_arch: 'arm64',
               openssl_arch: 'arm64-linux',
               rust_target: 'aarch64-unknown-linux-gnu',
-              runner: 'ubuntu-latest',
+              runner: 'ubuntu-24.04',
               artifacts: 'archive,cli,deb,rpm'
             },
             {
@@ -127,7 +130,7 @@ jobs:
               npm_arch: 'arm',
               openssl_arch: 'arm-linux',
               rust_target: 'armv7-unknown-linux-gnueabihf',
-              runner: 'ubuntu-latest',
+              runner: 'ubuntu-24.04',
               artifacts: 'archive,deb,rpm'
             },
             {
@@ -176,7 +179,7 @@ jobs:
               format,
               runner: item.arch === 'arm64'
                 ? 'ubuntu-24.04-arm'
-                : 'ubuntu-latest'
+                : 'ubuntu-24.04'
             })));
           const output = [
             `matrix=${JSON.stringify({ include })}`,
@@ -212,7 +215,7 @@ jobs:
   linux-arm64-cli:
     name: Build Linux arm64 CLI
     if: github.event_name != 'workflow_dispatch' || inputs.linux_arm64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Checkout repository
@@ -881,7 +884,7 @@ jobs:
       (github.event_name != 'workflow_dispatch' || inputs.linux_x64)
     needs:
       - app-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout repository
