@@ -573,6 +573,16 @@ still provide the originating hosted `webContentsId` and that
 process id or the tracked web-contents id. Do not replace that check with a
 broader window or frame heuristic to preserve compatibility.
 
+**Microsoft-only Electron fixes.** Microsoft product builds download Electron
+from the private `electronArtifactFeed`; Hucode uses public Electron releases.
+Upstream sometimes enables build steps that rely on fixes only that feed
+carries. The packaged Node.js compile cache is one: public Electron appends the
+uid to POSIX cache tags, so `build/lib/hucodeNodeCompileCache.ts` keeps
+generation to Windows unless a feed is configured. When upstream widens
+`shouldGenerateNodeCompileCache` or a similar gate, check it against public
+Electron before trusting it. Only the release build exercises these steps;
+ordinary compiles and CI do not.
+
 ### Triage Of Failing Tests
 
 Do not classify a failing test as a pre-existing or environment-only artifact

@@ -36,7 +36,8 @@ import globCallback from 'glob';
 import rceditCallback from 'rcedit';
 import { spawnTsgo } from './lib/tsgo.ts';
 import { runEsbuildTranspile, runEsbuildBundle, getBootstrapEntryPointsForTarget } from './lib/esbuild.ts';
-import { generateNodeCompileCache, shouldGenerateNodeCompileCache } from './lib/nodeCompileCache.ts';
+import { generateNodeCompileCache } from './lib/nodeCompileCache.ts';
+import { shouldGenerateHucodeNodeCompileCache } from './lib/hucodeNodeCompileCache.ts';
 
 
 const glob = promisify(globCallback);
@@ -626,7 +627,7 @@ BUILD_TARGETS.forEach(buildTarget => {
 		if (platform === 'win32') {
 			packageTasks.push(patchWin32DependenciesTask(destinationFolderName));
 		}
-		if (shouldGenerateNodeCompileCache(platform, arch, product)) {
+		if (shouldGenerateHucodeNodeCompileCache(platform, arch, product)) {
 			packageTasks.push(generateNodeCompileCacheTask(platform, destinationFolderName));
 		}
 
