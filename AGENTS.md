@@ -138,6 +138,13 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
 - Do not run multiple `./scripts/test.sh` invocations concurrently. They share
   the same `.build/electron` app preparation path and can race while creating
   framework symlinks.
+- `build/hucode/run-with-mixin.js` writes the Hucode overlay into root
+  `product.json` and `resources/` for the life of its subprocess. Every command
+  that runs under it, including `hucode:compile`, `hucode:watch`,
+  `hucode:run`, `hucode:web`, and smokes that launch `scripts/hucode.sh` or
+  `hucode:web`, therefore changes repository state that other commands read. Do not run the build-package tests or
+  `hucode:validate` alongside one: `hucodeMixin.test.ts` then fails with
+  `'Hucode'` where it expects `'Code - OSS'`.
 - The esbuild `out/` transpile (used by dev compiles and CI unit tests since
   VS Code 1.126.0) lowers classes with static fields to renamed const
   bindings (e.g. `_ChatRequestTextPart`), so tests must not assert

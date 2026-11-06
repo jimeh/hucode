@@ -62,10 +62,12 @@ behalf.
 Note that `upstream-<version>` branch names are unrelated to any remote named
 `upstream`; the prefix stays the same regardless of remote naming.
 
-If a Git operation fails because the host lacks `git-lfs`, read
-[Host Environment Recovery](references/host-environment.md) for the bounded
-pointer-only fallback. Do not bypass LFS until the final upgrade diff proves it
-contains no LFS-managed change.
+An LFS smudge failure on a host that has `git-lfs` usually means the new
+baseline's objects were never fetched from `microsoft/vscode`; see
+`Create The New Baseline`. If a Git operation fails because the host lacks
+`git-lfs`, read [Host Environment Recovery](references/host-environment.md) for
+the bounded pointer-only fallback. Do not bypass LFS until the final upgrade
+diff proves it contains no LFS-managed change.
 
 ## Preflight
 
@@ -256,7 +258,15 @@ tag:
 
 ```sh
 git fetch "$VSCODE_REMOTE" tag <new-version>
+git lfs fetch "$VSCODE_REMOTE" <new-version>
 ```
+
+Upstream still tracks Copilot simulation caches through Git LFS, and each
+release can add objects that `origin`'s LFS storage has never seen. Git LFS
+downloads from `origin` by default, so without the second command, checking out
+the baseline, and any later rebase that checks it out, fails with a smudge
+`404 Object does not exist on the server`, even on a host with `git-lfs`
+installed.
 
 While the replay checkout still contains Hucode's build tooling, compare every
 tracked upstream source with the fetched clean tag:
@@ -276,8 +286,16 @@ Create and publish the clean baseline only after recording that result:
 
 ```sh
 git switch --create upstream-<new-version> <new-version>
+git lfs push origin upstream-<new-version>
 git push -u origin upstream-<new-version>
 ```
+
+GitHub rejects a push whose commits reference LFS objects missing from the
+repository's LFS storage (`GH008: Your push referenced at least N unknown Git
+LFS objects`), so upload the objects before the branch. `GIT_LFS_SKIP_PUSH=1`
+cannot satisfy that check; the pointer-only fallback in
+[Host Environment Recovery](references/host-environment.md) is for local Git
+operations only.
 
 Create the new series branch locally:
 
@@ -378,6 +396,11 @@ upstream APIs over preserving old compatibility paths. When resolving:
   as `agentHostTestSelection.test.ts`, `detectChanges.test.ts`, and
   `detectMissingCaches.test.ts` do. Leave workflow paths that are inputs to a
   change detector unchanged; they model pull-request file names, not reads.
+- Hucode carries no Copilot simulation cache. The marketplace topic deletes
+  `extensions/copilot/test/simulation/cache/`, so expect a modify/delete
+  conflict when upstream updates `base.sqlite`, and resolve it with `git rm`.
+  New upstream layers apply cleanly and must also be removed in that topic;
+  `hucodeCopilotSimulationCache.test.ts` fails while any file there is tracked.
 - Resolve `package-lock.json` and `remote/package-lock.json` conflicts by
   keeping upstream's newer records and Hucode's added ones, then run
   `npm install --package-lock-only --ignore-scripts` in that directory. A
@@ -666,7 +689,13 @@ mirrored into the Omni counterpart at the same relative position or added to
 the test's documented-omissions map with a reason. Bootstrap imports usually
 mean new service wiring (for example the 1.126.0 remote file-system proxy
 registrations), so prefer mirroring over omitting; omitting is for
-contributions Omni deliberately does not ship. Import-contract tests do not
+contributions Omni deliberately does not ship. When the test instead reports
+an import that upstream removed, do not just delete it from Omni: find where
+upstream now registers that service and mirror it. In 1.145.1 upstream stopped
+importing `canonicalUriService.js` from `workbench.common.main.ts` because
+`DesktopMain` and `BrowserMain` began constructing `CanonicalUriService`
+directly; deleting the Omni import alone would have left Omni desktop without
+`ICanonicalUriService`. Import-contract tests do not
 prove service construction, aliases, lifecycle registration, or ordering.
 Compilation can also pass when upstream adds optional constructor arguments or
 a later contribution resolves a missing service through dependency injection.

@@ -5,10 +5,10 @@ headless Linux runtime smoke.
 
 ## Git LFS unavailable
 
-Read the Git LFS rule in `AGENTS.md` before using this fallback. If checkout,
-reset, rebase, or push fails because the host lacks `git-lfs`, first verify that
-the upgrade's new commits do not add or modify LFS-managed content. When the
-operation only needs historical pointer text, run it with LFS filters disabled:
+If checkout, reset, or rebase fails because the host lacks `git-lfs`, first
+verify that the upgrade's new commits do not add or modify LFS-managed content.
+When the operation only needs historical pointer text, run it with LFS filters
+disabled:
 
 ```sh
 git \
@@ -19,9 +19,18 @@ git \
 	<command>
 ```
 
-For a push under the same condition, also set `GIT_LFS_SKIP_PUSH=1`. Do not use
-this fallback when the new commits contain an LFS payload. Install `git-lfs`
-and publish the object instead.
+Do not use this fallback when the new commits contain an LFS payload; install
+`git-lfs` and publish the object instead. That includes publishing
+`upstream-<version>`: upstream baselines carry LFS pointers, and GitHub rejects
+a push that references objects missing from `origin` (`GH008`), so
+`GIT_LFS_SKIP_PUSH=1` cannot publish them. Upload the objects with
+`git lfs push origin upstream-<version>` from a host that has fetched them.
+
+A checkout that fails partway leaves the worktree half switched: HEAD stays on
+the old branch while tracked and untracked files from the target tree are
+already written. Before retrying, confirm every untracked file is a path in the
+target tree, for example by comparing `git ls-files --others --exclude-standard`
+with `git ls-tree -r --name-only <target>`, and remove only those.
 
 ## Headless Linux Electron suites
 
