@@ -942,6 +942,16 @@ jobs:
             --app ../VSCode-linux-x64 \
             --timeout-ms 600000
 
+      # The Agents window has its own renderer entrypoint and bundle, so it
+      # can miss a Hucode service registration that every other window has.
+      - name: Run packaged Agents window smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          dbus-run-session -- xvfb-run -a pnpm run hucode:smoke:agents-window \
+            --app ../VSCode-linux-x64 \
+            --timeout-ms 180000
+
       - name: Upload packaged Omni smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

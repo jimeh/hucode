@@ -316,6 +316,15 @@ suite('Hucode release workflow contract', () => {
 			);
 		});
 
+		test('opens the packaged Agents window under a display and bus', () => {
+			// The Agents window loads its own bundle, which the Omni lifecycle
+			// smoke never opens.
+			assert.match(
+				launchStep,
+				/- name: Run packaged Agents window smoke\n(?:\s+[^\n]*\n)*?\s+dbus-run-session -- xvfb-run -a pnpm run hucode:smoke:agents-window \\\n\s+--app \.\.\/VSCode-linux-x64 \\\n\s+--timeout-ms \d+/
+			);
+		});
+
 		test('uploads lifecycle diagnostics after a smoke failure', () => {
 			assert.match(
 				launchStep,

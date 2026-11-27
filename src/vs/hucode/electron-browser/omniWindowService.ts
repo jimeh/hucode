@@ -5,6 +5,11 @@
 
 // This historical path is the stable desktop Hucode composition root; despite
 // its name, it owns registration side effects rather than a broad service.
+// Every desktop renderer entrypoint (workbench, Omni shell, and Agents window)
+// imports it, because Hucode patches to shared desktop services such as
+// WorkbenchHostService depend on these registrations in every window kind.
+import '../../platform/projectManager/electron-browser/projectManagerService.js';
+import '../../workbench/electron-browser/hucodeConfiguration.contribution.js';
 import './hostedShellServiceAdapter.js';
 import './hucodeClipboardService.js';
 import './migration/editorMigrationSourceService.js';

@@ -2219,7 +2219,10 @@ export function createLinuxOmniLaunchEnvironment(
 	return result;
 }
 
-async function getAvailablePort(): Promise<number> {
+/**
+ * Reserves a free loopback port for the application's CDP endpoint.
+ */
+export async function getAvailablePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
 		const server = createServer();
 		server.once('error', reject);
@@ -2366,7 +2369,10 @@ function ensureChildIsRunning(
 	}
 }
 
-async function terminateProcessGroup(child: ChildProcess): Promise<void> {
+/**
+ * Stops a detached launch's process group, escalating to SIGKILL after 3s.
+ */
+export async function terminateProcessGroup(child: ChildProcess): Promise<void> {
 	if (child.pid) {
 		try {
 			process.kill(-child.pid, 'SIGTERM');

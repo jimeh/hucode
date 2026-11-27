@@ -308,6 +308,16 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   omitted service can pass compilation and unit tests but fail when a
   block-startup contribution is instantiated. Verify this boundary with the
   Linux Omni smoke or a real desktop launch.
+- Each desktop renderer has its own entrypoint: `workbench.desktop.main.ts`,
+  `omni.desktop.main.ts`, and the Agents window's `sessions.desktop.main.ts`.
+  They share upstream desktop services that Hucode patches, such as
+  `WorkbenchHostService`, so register a renderer service those patches depend
+  on in the composition root `src/vs/hucode/electron-browser/omniWindowService.ts`,
+  not in one entrypoint. A dependency registered only in the workbench left the
+  Agents window blank from the Omni hosted-shell topic until 1.148.0. Run
+  `pnpm run hucode:smoke:agents-window --executable ./scripts/hucode.sh` (with
+  the same sandbox, `dbus-run-session`, and xvfb setup as the Linux Omni smoke)
+  after changing shared desktop service dependencies.
 - CSS imported by route-specific Hucode web entrypoints is flattened into the
   shared stylesheet in minified server-web builds, even when a development
   dynamic import never executes. Scope Omni-only selectors under

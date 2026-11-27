@@ -2198,7 +2198,8 @@ export default [
 						'vs/workbench/api/~',
 						'vs/workbench/services/*/~',
 						'vs/workbench/contrib/*/~',
-						'vs/sessions/sessions.common.main.js'
+						'vs/sessions/sessions.common.main.js',
+						'vs/hucode/electron-browser/omniWindowService.js'
 					]
 				},
 				{

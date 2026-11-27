@@ -107,6 +107,9 @@ import '../workbench/services/browserView/electron-browser/playwrightWorkbenchSe
 import '../workbench/services/process/electron-browser/processService.js';
 import '../workbench/services/power/electron-browser/powerService.js';
 import '../workbench/services/localTranscription/electron-browser/localTranscriptionService.js';
+// Hucode desktop registrations. Must follow the service imports above so its
+// overrides, such as IClipboardService, win.
+import '../hucode/electron-browser/omniWindowService.js';
 
 import { ILocalGitService } from '../platform/git/common/localGitService.js';
 import { InstantiationType, registerSingleton } from '../platform/instantiation/common/extensions.js';

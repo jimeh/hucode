@@ -25,6 +25,7 @@ const desktopCompositionRootPath =
 	'src/vs/hucode/electron-browser/omniWindowService.ts';
 const omniDesktopMainPath = 'src/vs/hucode/omni.desktop.main.ts';
 const workbenchDesktopMainPath = 'src/vs/workbench/workbench.desktop.main.ts';
+const sessionsDesktopMainPath = 'src/vs/sessions/sessions.desktop.main.ts';
 
 suite('Hucode desktop shell authority boundary', () => {
 	test('does not publish the complete shell service as global IPC', async () => {
@@ -88,7 +89,7 @@ suite('Hucode desktop shell authority boundary', () => {
 		}
 	);
 
-	test('desktop entrypoints register only the narrow shell adapters', async () => {
+	test('every desktop entrypoint loads the composition root of narrow shell adapters', async () => {
 		const compositionRoot = await readSource(desktopCompositionRootPath);
 		assert.match(
 			compositionRoot,
@@ -99,21 +100,42 @@ suite('Hucode desktop shell authority boundary', () => {
 			/\.\/shellControllerServiceAdapter\.js/
 		);
 		assert.match(compositionRoot, /\.\/hucodeClipboardService\.js/);
+		assert.match(
+			compositionRoot,
+			/platform\/projectManager\/electron-browser\/projectManagerService\.js/
+		);
+		assert.match(
+			compositionRoot,
+			/workbench\/electron-browser\/hucodeConfiguration\.contribution\.js/
+		);
 		assert.doesNotMatch(compositionRoot, /registerMainProcessRemoteService/);
 		assert.doesNotMatch(compositionRoot, /HUCODE_SHELL_CHANNEL_NAME/);
 
-		for (const [entrypoint, compositionRootImport] of [
-			[
-				omniDesktopMainPath,
-				'./electron-browser/omniWindowService.js',
-			],
-			[
-				workbenchDesktopMainPath,
-				'../hucode/electron-browser/omniWindowService.js',
-			],
-		] as const) {
+		// Every desktop renderer entrypoint shares Hucode-patched desktop
+		// services, so each must load the composition root. A missing import
+		// leaves a window blank at startup (the Agents window did).
+		const desktopEntrypoints = (await collectTypeScriptFiles(
+			path.join(repoRoot, 'src', 'vs')
+		))
+			.filter(file => file.endsWith('.desktop.main.ts'))
+			.map(file => path.relative(repoRoot, file).split(path.sep).join('/'))
+			.sort();
+		assert.deepStrictEqual(desktopEntrypoints, [
+			omniDesktopMainPath,
+			sessionsDesktopMainPath,
+			workbenchDesktopMainPath,
+		]);
+		for (const entrypoint of desktopEntrypoints) {
 			const source = await readSource(entrypoint);
-			assert.match(source, new RegExp(escapeRegExp(compositionRootImport)));
+			const compositionRootImport = path.posix.relative(
+				path.posix.dirname(entrypoint),
+				desktopCompositionRootPath.replace(/\.ts$/, '.js')
+			);
+			assert.match(
+				source,
+				new RegExp(`['"](?:\\./)?${escapeRegExp(compositionRootImport)}['"]`),
+				`${entrypoint} must import ${compositionRootImport}`
+			);
 			assert.doesNotMatch(source, /hostedShellServiceAdapter\.js/);
 			assert.doesNotMatch(source, /shellControllerServiceAdapter\.js/);
 		}

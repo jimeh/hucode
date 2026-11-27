@@ -21,7 +21,6 @@ import './workbench.common.main.js';
 
 import './electron-browser/desktop.main.js';
 import './electron-browser/desktop.contribution.js';
-import './electron-browser/hucodeConfiguration.contribution.js';
 
 //#endregion
 
@@ -104,7 +103,6 @@ import '../platform/agentHost/electron-browser/sshRemoteAgentHostService.js';
 import './services/browserView/electron-browser/playwrightWorkbenchService.js';
 import './services/process/electron-browser/processService.js';
 import './services/power/electron-browser/powerService.js';
-import '../platform/projectManager/electron-browser/projectManagerService.js';
 import '../hucode/electron-browser/omniWindowService.js';
 
 import { registerSingleton } from '../platform/instantiation/common/extensions.js';

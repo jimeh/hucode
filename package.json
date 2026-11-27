@@ -32,6 +32,7 @@
     "hucode:verify-setup-ui-vendor": "node extensions/hucode-setup-ui/scripts/verify-vendor.mts",
     "hucode:check-test-suites": "node build/hucode/test-suites.ts --check",
     "hucode:check-upstream-provenance": "node build/hucode/upstream-provenance.ts",
+    "hucode:smoke:agents-window": "node build/hucode/agents-window-smoke.ts",
     "hucode:smoke:linux-omni": "node build/hucode/linux-omni-smoke.ts",
     "hucode:smoke:web-server-user-data": "node build/hucode/web-server-user-data-smoke.ts",
     "hucode:watch": "pnpm run hucode:prepare && node build/hucode/run-with-mixin.js --quality stable -- pnpm run watch",
