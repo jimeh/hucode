@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.102 - 2026-11-27
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.148.0
+
+### Bug Fixes
+
+- **sessions:** open the Agents window instead of a blank window
+
 ## 0.0.101 - 2026-11-20
 
 ### Features
